@@ -1,0 +1,4 @@
+---
+# These variables are now deprecated and moved to defaults/main.yml
+# They are kept here for backward compatibility only
+# Please use the variables from defaults/main.yml instead

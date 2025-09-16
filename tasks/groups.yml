@@ -1,0 +1,11 @@
+---
+- name: Local groups | Create groups
+  become: true
+  ansible.builtin.group:
+    name: '{{ item }}'
+    state: present
+  loop: '{{ samba_local_groups | list }}'
+  no_log: '{{ samba_local_groups_no_log | bool }}'
+  tags:
+    - samba
+    - samba-groups

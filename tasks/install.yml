@@ -1,0 +1,161 @@
+---
+- name: Install Samba requirements
+  become: true
+  ansible.builtin.package:
+    name: '{{ samba_packages }}'
+    state: present
+  register: samba_packages_result
+  changed_when: samba_packages_result.changed
+  tags:
+    - samba
+    - samba-install
+
+- name: Install Samba tools
+  become: true
+  ansible.builtin.package:
+    name: '{{ samba_tool_packages }}'
+    state: present
+  register: samba_tools_result
+  changed_when: samba_tools_result.changed
+  tags:
+    - samba
+    - samba-install
+
+- name: Install Samba Domain Controller requirements
+  become: true
+  ansible.builtin.package:
+    name: '{{ samba_ad_packages }}'
+    state: present
+  when:
+    - samba_create_domain_controller|bool
+  register: samba_ad_packages_result
+  changed_when: samba_ad_packages_result.changed
+  tags:
+    - samba
+    - samba-install
+    - samba-ad
+
+- name: Install Samba Cluster requirements
+  become: true
+  ansible.builtin.package:
+    name: '{{ samba_db_packages }}'
+    state: present
+  when:
+    - samba_create_cluster|bool
+  register: samba_cluster_packages_result
+  changed_when: samba_cluster_packages_result.changed
+  tags:
+    - samba
+    - samba-install
+    - samba-cluster
+
+- name: Ensure Samba standalone service are enabled
+  when:
+    - not samba_create_domain_controller|bool
+  tags:
+    - samba
+    - samba-service
+    - samba-standalone
+  block:
+    - name: Ensure Samba AD Domain Controller service is disabled and masked
+      become: true
+      ansible.builtin.systemd_service:
+        service: samba-ad-dc
+        masked: true
+        enabled: false
+
+    - name: Ensure Samba standalone is enabled and unmasked
+      become: true
+      ansible.builtin.systemd_service:
+        service: smbd
+        masked: false
+        enabled: true
+
+    - name: Ensure Samba NetBIOS name service is enabled and unmasked
+      become: true
+      ansible.builtin.systemd_service:
+        service: nmbd
+        masked: false
+        enabled: true
+
+    - name: Ensure Samba winbind service is enabled and unmasked
+      become: true
+      ansible.builtin.systemd_service:
+        service: winbind
+        masked: false
+        enabled: true
+
+- name: Ensure Samba Active Directory Domain Controller service are enabled
+  when:
+    - samba_create_domain_controller|bool
+  tags:
+    - samba
+    - samba-service
+    - samba-ad
+  block:
+    - name: Ensure Samba standalone is disabled and masked
+      become: true
+      ansible.builtin.systemd_service:
+        service: smbd
+        masked: true
+        enabled: false
+
+    - name: Ensure Samba NetBIOS name service is disabled and masked
+      become: true
+      ansible.builtin.systemd_service:
+        service: nmbd
+        masked: true
+        enabled: false
+
+    - name: Ensure Samba winbind service is disabled and masked
+      become: true
+      ansible.builtin.systemd_service:
+        service: winbind
+        masked: true
+        enabled: false
+
+    - name: Ensure Samba AD Domain Controller service is enabled and unmasked
+      become: true
+      ansible.builtin.systemd_service:
+        service: samba-ad-dc
+        masked: false
+        enabled: true
+        state: stopped
+      when:
+        - samba_create_domain_controller|bool
+
+- name: Ensure Samba member server services are enabled
+  when:
+    - samba_server_role == 'member server'
+  tags:
+    - samba
+    - samba-service
+    - samba-member
+  block:
+    - name: Ensure Samba AD Domain Controller service is disabled and masked
+      become: true
+      ansible.builtin.systemd_service:
+        service: samba-ad-dc
+        masked: true
+        enabled: false
+
+    - name: Ensure Samba standalone is enabled and unmasked
+      become: true
+      ansible.builtin.systemd_service:
+        service: smbd
+        masked: false
+        enabled: true
+
+    - name: Ensure Samba NetBIOS name service is enabled and unmasked
+      become: true
+      ansible.builtin.systemd_service:
+        service: nmbd
+        masked: false
+        enabled: true
+
+    - name: Ensure Samba winbind service is enabled and unmasked
+      become: true
+      ansible.builtin.systemd_service:
+        service: winbind
+        masked: false
+        enabled: true

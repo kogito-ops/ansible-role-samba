@@ -1,0 +1,67 @@
+---
+- name: Join domain | Checking If Already Joined To Domain
+  ansible.builtin.stat:
+    path: '{{ samba_statedir }}/.samba_ad_joined'
+  register: samba_ad_join_check
+  tags:
+    - samba
+    - samba-ad
+    - samba-join
+
+- name: Join domain | Check service states on primary domain controller
+  become: true
+  ansible.builtin.service_facts:
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  register: samba_ad_dc_primary_service
+  until: samba_ad_dc_primary_service.ansible_facts.services['samba-ad-dc.service'].state == 'running'
+  retries: 10
+  delay: 3
+  ignore_errors: true
+  when:
+    - samba_primary_domain_controller in groups[samba_domain_controllers_group] | default([])
+  tags:
+    - samba
+    - samba-ad
+    - samba-join
+
+- name: Join domain | Joining Domain
+  become: true
+  ansible.builtin.shell:
+    cmd: |
+      samba-tool domain join \
+        {{ samba_domain_member.domain | default(samba_ad_info['ad_dns_domain_name']) }} \
+        DC \
+        --server="{{ samba_primary_domain_controller }}" \
+        --username="{{ samba_domain_member.domain_admin_user | default('Administrator') }}" \
+        --password="{{ samba_domain_member.domain_admin_password | default(samba_ad_info['adminpass']) }}" \
+        {% if samba_allow_unencrypted_ldap | default(false) | bool %}\
+        --option='ldap server require strong auth=no' \
+        --option='client ldap sasl wrapping=plain'{% endif %}
+  register: _samba_domain_joined
+  no_log: true
+  failed_when:
+    - _samba_domain_joined.rc != 0
+    - '"Joined domain" not in _samba_domain_joined.stdout'
+  retries: 3
+  delay: 10
+  until: _samba_domain_joined is not failed
+  when:
+    - not samba_ad_join_check['stat']['exists']
+  changed_when: '"Joined domain" in _samba_domain_joined.stdout'
+  tags:
+    - samba
+    - samba-ad
+    - samba-join
+
+- name: Join domain | Marking As Joined To Domain # noqa: no-handler
+  become: true
+  ansible.builtin.file:
+    path: '{{ samba_statedir }}/.samba_ad_joined'
+    state: touch
+    mode: '0644'
+  when:
+    - _samba_domain_joined['changed']
+  tags:
+    - samba
+    - samba-ad
+    - samba-join

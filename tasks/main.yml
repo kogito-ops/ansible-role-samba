@@ -1,0 +1,161 @@
+---
+- name: Include distribution and version-specific vars.
+  ansible.builtin.include_vars: '{{ lookup("first_found", params) }}'
+  vars:
+    params:
+      files:
+        - '{{ ansible_distribution | lower }}-{{ ansible_distribution_major_version }}.yml'
+        - '{{ ansible_distribution | lower }}-{{ ansible_distribution_version }}.yml'
+        - '{{ ansible_distribution | lower }}-{{ ansible_distribution_release }}.yml'
+        - '{{ ansible_distribution | lower }}.yml'
+        - '{{ ansible_os_family | lower }}.yml'
+      paths:
+        - 'vars'
+      skip: true
+
+- name: Load assertions
+  ansible.builtin.import_tasks: assertions.yml
+
+- name: Import fact tasks
+  ansible.builtin.include_tasks: facts.yml
+
+- name: Import installation tasks
+  ansible.builtin.include_tasks: install.yml
+
+- name: Import Samba configuration tasks
+  ansible.builtin.include_tasks: configure.yml
+
+- name: Ensure Samba directories exist with correct permissions
+  ansible.builtin.include_tasks: ensure_directories.yml
+
+- name: Import Samba domain creation tasks
+  ansible.builtin.include_tasks: create_domain.yml
+  when:
+    - samba_create_domain_controller is defined
+    - samba_create_domain_controller|bool
+    - samba_domain_controllers_group is defined
+
+- name: Import Samba domain join tasks
+  ansible.builtin.include_tasks: join_domain.yml
+  when:
+    - samba_join_domain is defined
+    - samba_join_domain|bool
+    - samba_server_role == 'active directory domain controller'
+    - samba_domain_controllers_group is defined
+    - inventory_hostname != samba_primary_domain_controller
+
+- name: Import Samba member server join tasks
+  ansible.builtin.include_tasks: join_member.yml
+  when:
+    - samba_server_role == 'member server'
+    - samba_join_domain|bool
+
+- name: Import Samba password policy configuration
+  ansible.builtin.include_tasks: configure_policies.yml
+  when:
+    - samba_create_domain_controller is defined
+    - samba_create_domain_controller|bool
+    - samba_server_role == 'active directory domain controller'
+    - inventory_hostname == samba_primary_domain_controller
+
+- name: Enable AD Recycle Bin
+  ansible.builtin.include_tasks: enable_recycle_bin.yml
+  when:
+    - samba_server_role == 'active directory domain controller'
+    - samba_enable_recycle_bin | default(true)
+    - _samba_domain_exists | default(false)
+
+- name: Import Samba local group tasks
+  ansible.builtin.include_tasks: groups.yml
+
+- name: Import Samba local user tasks
+  ansible.builtin.include_tasks: users.yml
+
+- name: Import Samba user profile tasks
+  ansible.builtin.include_tasks: profiles.yml
+
+- name: Import Samba shared directory tasks
+  ansible.builtin.include_tasks: shares.yml
+
+- name: Import Samba domain users
+  ansible.builtin.include_tasks: domain_users.yml
+  tags:
+    - samba_domain_account_management
+    - samba_domain_users
+  when:
+    - samba_create_domain_users is defined
+    - samba_create_domain_users|bool
+    - samba_domain_controllers_group is defined
+    - inventory_hostname == samba_primary_domain_controller
+
+- name: Import Samba domain groups
+  ansible.builtin.include_tasks: domain_groups.yml
+  tags:
+    - samba_domain_account_management
+    - samba_domain_groups
+  when:
+    - samba_create_domain_groups is defined
+    - samba_create_domain_groups|bool
+    - samba_domain_controllers_group is defined
+    - inventory_hostname == samba_primary_domain_controller
+
+- name: Flush handlers before service management
+  ansible.builtin.meta: flush_handlers
+  when:
+    - samba_server_role == "active directory domain controller"
+
+- name: Check if Samba AD DC service exists
+  ansible.builtin.stat:
+    path: /lib/systemd/system/samba-ad-dc.service
+  register: samba_ad_dc_service_file
+  when:
+    - samba_server_role == "active directory domain controller"
+
+- name: Ensure Samba AD DC service is started and enabled
+  become: true
+  ansible.builtin.systemd:
+    name: samba-ad-dc
+    state: started
+    enabled: true
+    daemon_reload: false
+  when:
+    - samba_server_role == "active directory domain controller"
+    - samba_ad_dc_service_file.stat.exists | default(false)
+  changed_when: false
+  tags:
+    - samba
+    - samba-service
+
+- name: Ensure standalone Samba services are started
+  become: true
+  ansible.builtin.systemd:
+    name: '{{ item }}'
+    state: started
+    enabled: true
+    daemon_reload: false
+  loop:
+    - smbd
+    - nmbd
+  when:
+    - samba_server_role == "standalone"
+    - not samba_create_domain_controller|bool
+  tags:
+    - samba
+    - samba-service
+
+- name: Ensure member server Samba services are started
+  become: true
+  ansible.builtin.systemd:
+    name: '{{ item }}'
+    state: started
+    enabled: true
+    daemon_reload: false
+  loop:
+    - smbd
+    - nmbd
+    - winbind
+  when:
+    - samba_server_role == "member server"
+  tags:
+    - samba
+    - samba-service

@@ -1,0 +1,26 @@
+---
+- name: Domain users | Generate list of existing domain users
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool user list
+  changed_when: false
+  register: domain_users
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain-users
+
+- name: Domain users | Ensure domain users exist
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool user add {{ item['name'] }} '{{ item['password'] }}'
+  register: domain_users_create
+  changed_when: '" added successfully" in domain_users_create.stdout'
+  loop: '{{ samba_domain_users }}'
+  when:
+    - item['name'] not in domain_users['stdout']
+  no_log: '{{ samba_domain_users_no_log | bool }}'
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain-users

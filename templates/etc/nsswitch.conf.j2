@@ -1,0 +1,53 @@
+# {{ ansible_managed }}
+#
+# /etc/nsswitch.conf
+#
+# Example configuration of GNU Name Service Switch functionality.
+# If you have the `glibc-doc-reference' and `info' packages installed, try:
+# `info libc "Name Service Switch"' for information about this file.
+
+# Password and group databases
+{% if samba_server_role in ['active directory domain controller', 'member server'] %}
+{% if ansible_distribution == 'Ubuntu' %}
+passwd:         files systemd winbind
+group:          files systemd winbind
+shadow:         files systemd winbind
+gshadow:        files systemd winbind
+{% else %}
+passwd:         files winbind
+group:          files winbind
+shadow:         files winbind
+gshadow:        files winbind
+{% endif %}
+{% else %}
+{% if ansible_distribution == 'Ubuntu' %}
+passwd:         files systemd
+group:          files systemd
+shadow:         files systemd
+gshadow:        files systemd
+{% else %}
+passwd:         files
+group:          files
+shadow:         files
+gshadow:        files
+{% endif %}
+{% endif %}
+
+# Host name resolution
+{% if ansible_distribution == 'Debian' %}
+hosts:          files mdns4_minimal [NOTFOUND=return] dns
+{% elif ansible_distribution == 'Ubuntu' %}
+hosts:          files dns mymachines
+{% else %}
+hosts:          files dns
+{% endif %}
+networks:       files
+
+# Service configuration
+protocols:      db files
+services:       db files
+ethers:         db files
+rpc:            db files
+
+# Other databases
+netgroup:       nis

@@ -1,0 +1,18 @@
+---
+- name: Prepare
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Update package cache
+      ansible.builtin.apt:
+        update_cache: true
+      when: ansible_os_family == "Debian"
+      changed_when: false
+
+    - name: Set hostname properly
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}.{{ samba_primary_domain | default('test.local') }}"
+
+    - name: Display network configuration
+      ansible.builtin.debug:
+        msg: 'Using static IP configuration - DC: 172.20.0.2, Member: 172.20.0.3'

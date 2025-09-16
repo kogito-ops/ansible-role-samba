@@ -1,0 +1,33 @@
+#
+# {{ ansible_managed }}
+#
+
+[libdefaults]
+    default_realm = {{ samba_ad_info.kerberos_realm | upper }}
+    dns_lookup_realm = false
+    dns_lookup_kdc = true
+    ticket_lifetime = {{ samba_krb5_ticket_lifetime }}
+    renew_lifetime = {{ samba_krb5_renew_lifetime }}
+    forwardable = true
+    rdns = false
+    default_ccache_name = KEYRING:persistent:%{uid}
+
+    # Encryption types for Active Directory compatibility
+    default_tgs_enctypes = {% for enctype in samba_krb5_enctypes %}{{ enctype }}{% if not loop.last %} {% endif %}{% endfor %}
+    default_tkt_enctypes = {% for enctype in samba_krb5_enctypes %}{{ enctype }}{% if not loop.last %} {% endif %}{% endfor %}
+    permitted_enctypes = {% for enctype in samba_krb5_enctypes %}{{ enctype }}{% if not loop.last %} {% endif %}{% endfor %}
+
+[realms]
+    {{ samba_ad_info.kerberos_realm | upper }} = {
+        kdc = {{ samba_ad_info.ad_dc_fqdn | lower }}
+        admin_server = {{ samba_ad_info.ad_dc_fqdn | lower }}
+    }
+
+[domain_realm]
+    .{{ samba_ad_info.kerberos_realm | lower }} = {{ samba_ad_info.kerberos_realm | upper }}
+    {{ samba_ad_info.kerberos_realm | lower }} = {{ samba_ad_info.kerberos_realm | upper }}
+
+[logging]
+    default = FILE:{{ samba_system_logdir | default('/var/log') }}/krb5libs.log
+    kdc = FILE:{{ samba_system_logdir | default('/var/log') }}/krb5kdc.log
+    admin_server = FILE:{{ samba_system_logdir | default('/var/log') }}/kadmind.log

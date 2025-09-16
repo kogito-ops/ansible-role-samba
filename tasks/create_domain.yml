@@ -1,0 +1,171 @@
+---
+- name: Create domain | Configure Kerberos
+  become: true
+  ansible.builtin.template:
+    src: etc/krb5.conf.j2
+    dest: '{{ samba_krb5_conf }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Restart Samba service
+    - Restart Samba NetBIOS service
+    - Restart Samba AD Domain Controller service
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
+- name: Create domain | Create Domain-Computer group
+  become: true
+  ansible.builtin.group:
+    name: Domain-Computer
+    state: present
+  when:
+    - inventory_hostname == samba_primary_domain_controller
+    - samba_enhanced_provisioning_enabled|bool
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
+- name: Create domain | Check if AD Domain was already created
+  ansible.builtin.stat:
+    path: '{{ samba_statedir }}/.samba_ad_created'
+  register: samba_ad_created_check
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
+- name: Create domain | configuring Active Directory # yamllint disable rule:line-length
+  become: true
+  ansible.builtin.command:
+    cmd: >-
+      samba-tool domain provision --dns-backend='{{ samba_ad_info['backend_dns'] }}' --realm='{{ samba_ad_info['kerberos_realm'] | upper }}' --domain='{{ samba_ad_info['netbios_domain_name'] | upper }}' --adminpass='{{ samba_ad_info['adminpass'] }}' --machinepass='{{ samba_ad_info['machinepass'] }}' --backend-store='{{ _samba_backend_store }}' --server-role='dc' --use-rfc2307 --host-name='{{ ansible_hostname }}' --host-ip='{{ ansible_default_ipv4.address }}' {% if samba_enhanced_provisioning_enabled | bool -%} --option="dns forwarder={{ samba_ad_info.dns_forwarder }}" --option="rpc server dynamic port range={{ samba_rpc_port_range }}" {% if samba_security_options.reject_md5_clients | bool -%} --option="reject md5 clients = yes" {% endif -%} {% if samba_security_options.reject_md5_servers | bool -%} --option="reject md5 servers = yes" {% endif -%} {% if samba_security_options.require_strong_auth | bool -%} --option="ldap server require strong auth = yes" {% endif -%} --option="add machine script={{ samba_useradd_command }} -N -M -g Domain-Computer -d {{ samba_system_homedir }} -s {{ samba_system_shell }} %u" --option="add user script={{ samba_useradd_command }} %u" --option="add group script={{ samba_groupadd_command }} %g" --option="add user to group script={{ samba_usermod_command }} -a -G %g %u" --option="delete user script=/usr/sbin/deluser %u" --option="delete group script=/usr/sbin/groupdel %g" --option="delete user from group script=/usr/sbin/deluser %u %g" --option="password hash userPassword schemes = {{ samba_security_options.password_hash_schemes | join(' ') }}" --option="template shell = {{ samba_system_shell }}" --option="template homedir = {{ samba_system_homedir }}" {% endif -%}
+
+  register: samba_ad_created
+  no_log: true
+  failed_when:
+    - samba_ad_created.rc != 0
+    - '"Domain provisioned OK" not in samba_ad_created.stdout'
+  when:
+    - not samba_ad_created_check['stat']['exists']|bool
+    - samba_create_domain_controller is defined
+    - samba_create_domain_controller|bool
+    - samba_server_role == "active directory domain controller"
+    - inventory_hostname == samba_primary_domain_controller
+  changed_when: '"Domain provisioned OK" in samba_ad_created.stdout'
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+# yamllint enable rule:line-length
+
+- name: Create domain | marking domain as created
+  ansible.builtin.file:
+    dest: '{{ samba_statedir }}/.samba_ad_created'
+    state: touch
+    mode: '0644'
+  become: true
+  register: _samba_domain_created
+  when:
+    - samba_ad_created['changed']
+    - not samba_ad_created_check['stat']['exists']|bool
+    - inventory_hostname == samba_primary_domain_controller
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
+- name: Create domain | Fix permissions on Samba private directory
+  become: true
+  ansible.builtin.file:
+    path: '{{ samba_datadir }}/private'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when:
+    - inventory_hostname == samba_primary_domain_controller
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
+- name: Create domain | Ensure smbd.tmp directory exists
+  become: true
+  ansible.builtin.file:
+    path: '{{ samba_datadir }}/private/smbd.tmp'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  when:
+    - inventory_hostname == samba_primary_domain_controller
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
+- name: Create domain | Setting Fact For Domain Creation Status For Primary Domain Controller
+  ansible.builtin.set_fact:
+    _samba_domain_exists: true
+  when:
+    - inventory_hostname == samba_primary_domain_controller
+    - samba_ad_created_check['stat']['exists']|bool or _samba_domain_created['changed']
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
+- name: Create domain | Gather facts from primary domain controller
+  ansible.builtin.setup:
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  delegate_facts: true
+  when:
+    - inventory_hostname in groups[samba_domain_controllers_group]
+    - inventory_hostname != samba_primary_domain_controller
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
+- name: Create domain | Setting Fact For Domain Creation Status For Non Primary Domain Controller
+  ansible.builtin.set_fact:
+    _samba_domain_exists: true
+  when:
+    - inventory_hostname in groups[samba_domain_controllers_group]
+    - inventory_hostname != samba_primary_domain_controller
+    - hostvars[samba_primary_domain_controller]['_samba_domain_exists'] is defined
+    - hostvars[samba_primary_domain_controller]['_samba_domain_exists']
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
+- name: Create domain | marking domain as created
+  ansible.builtin.file:
+    dest: '{{ samba_statedir }}/.samba_ad_created'
+    state: touch
+    mode: '0644'
+  become: true
+  when:
+    - hostvars[inventory_hostname]['_samba_domain_exists'] | default(false)
+    - not samba_ad_created_check['stat']['exists']|bool
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
+- name: Create domain | Force trigger any pending handlers
+  ansible.builtin.meta: flush_handlers
+  when:
+    - samba_create_domain_controller is defined
+    - samba_create_domain_controller|bool
+    - samba_server_role == "active directory domain controller"
+    - inventory_hostname == samba_primary_domain_controller
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain

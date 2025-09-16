@@ -1,0 +1,106 @@
+---
+dependency:
+  name: galaxy
+driver:
+  name: podman
+scenario:
+  name: member-server
+platforms:
+  - name: dc-primary
+    hostname: dc-primary.samba.internal
+    image: docker.io/geerlingguy/docker-ubuntu2204-ansible:latest
+    command: /lib/systemd/systemd
+    systemd: true
+    tmpfs:
+      /run: rw,exec,nosuid,nodev,size=64m
+      /tmp: rw,exec,nosuid,nodev,size=64m
+    cgroupns_mode: host
+    privileged: true
+    pre_build_image: true
+    groups:
+      - samba_domain_controllers
+    networks:
+      - name: molecule-samba-member
+        ipv4_address: 172.20.0.2
+    dns_servers:
+      - 127.0.0.1
+      - 8.8.8.8
+    capabilities:
+      - SYS_ADMIN
+      - NET_ADMIN
+      - NET_RAW
+    exposed_ports:
+      - 53/tcp
+      - 53/udp
+      - 88/tcp
+      - 88/udp
+      - 389/tcp
+      - 445/tcp
+      - 464/tcp
+      - 464/udp
+  - name: member-1
+    hostname: member-1.samba.internal
+    image: docker.io/geerlingguy/docker-ubuntu2204-ansible:latest
+    command: /lib/systemd/systemd
+    systemd: true
+    tmpfs:
+      /run: rw,exec,nosuid,nodev,size=64m
+      /tmp: rw,exec,nosuid,nodev,size=64m
+    cgroupns_mode: host
+    privileged: true
+    pre_build_image: true
+    groups:
+      - samba_member_servers
+    networks:
+      - name: molecule-samba-member
+        ipv4_address: 172.20.0.3
+    dns_servers:
+      - 172.20.0.2 # Point to DC
+      - 8.8.8.8
+    capabilities:
+      - SYS_ADMIN
+      - NET_ADMIN
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      host_key_checking: false
+      callback_whitelist: timer,profile_tasks
+  inventory:
+    host_vars:
+      dc-primary:
+        samba_server_role: active directory domain controller
+        samba_create_domain_controller: true
+        samba_primary_domain: samba.internal
+        samba_ad_info:
+          ad_dc_hostname: dc-primary
+          ad_dc_fqdn: dc-primary.samba.internal
+          ad_dns_domain_name: samba.internal
+          adminpass: '${MOLECULE_SAMBA_ADMIN_PASS:-TestAdminPass123!}'
+          machinepass: '${MOLECULE_SAMBA_MACHINE_PASS:-TestMachinePass123!}'
+          allow_dns_updates: disabled
+          backend_dns: SAMBA_INTERNAL
+          dns_forwarder: 8.8.8.8
+          kerberos_realm: SAMBA.INTERNAL
+          netbios_domain_name: SAMBA
+      member-1:
+        samba_server_role: member server
+        samba_join_domain: true
+        samba_primary_domain: samba.internal
+        samba_domain_member:
+          domain: samba.internal
+          workgroup: SAMBA
+          realm: SAMBA.INTERNAL
+          domain_admin_user: Administrator
+          domain_admin_password: '${MOLECULE_DOMAIN_ADMIN_PASS:-TestDomainAdmin123!}'
+          domain_controller: dc-primary
+          id_mapping:
+            backend: rid
+            range_min: 10000
+            range_max: 999999
+    groups:
+      all:
+        vars:
+          samba_domain_controllers_group: samba_domain_controllers
+verifier:
+  name: ansible

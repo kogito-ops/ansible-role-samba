@@ -1,0 +1,13 @@
+---
+- name: Converge
+  hosts: all
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+      when: ansible_os_family == "Debian"
+      changed_when: false
+
+    - name: Include samba role
+      ansible.builtin.include_role:
+        name: kogito-ops.samba

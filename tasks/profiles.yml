@@ -1,0 +1,12 @@
+---
+- name: User profiles | Ensure user profile directory exist
+  become: true
+  ansible.builtin.file:
+    path: '{{ samba_profiles_path }}'
+    owner: root
+    group: root
+    mode: '1755'
+    state: directory
+  tags:
+    - samba
+    - samba-profiles

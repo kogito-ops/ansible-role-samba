@@ -1,0 +1,46 @@
+---
+- name: Recycle Bin | Check if recycle bin is already enabled
+  become: true
+  ansible.builtin.stat:
+    path: '{{ samba_statedir }}/.samba_recycle_bin_enabled'
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  register: _samba_recycle_bin_check
+  tags:
+    - samba
+    - samba-ad
+    - samba-recycle-bin
+
+- name: Recycle Bin | Enable AD Recycle Bin feature
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      samba-tool forest directory_service dsheuristics {{ samba_dsheuristics_value }}
+      -H ldap://localhost
+      -U {{ samba_recycle_bin_admin }}%{{ samba_ad_info.adminpass }}
+
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  no_log: true
+  register: _samba_recycle_bin
+  when: not _samba_recycle_bin_check.stat.exists
+  changed_when: _samba_recycle_bin.rc == 0
+  tags:
+    - samba
+    - samba-ad
+    - samba-recycle-bin
+- name: Recycle Bin | Mark recycle bin as enabled
+  become: true
+  ansible.builtin.file:
+    path: '{{ samba_statedir }}/.samba_recycle_bin_enabled'
+    state: touch
+    mode: '0644'
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - _samba_recycle_bin is changed
+    - _samba_recycle_bin.rc == 0
+  tags:
+    - samba
+    - samba-ad
+    - samba-recycle-bin

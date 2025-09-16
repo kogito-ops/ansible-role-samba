@@ -1,0 +1,44 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Check if Samba services are running on DC
+      ansible.builtin.systemd:
+        name: samba-ad-dc
+      register: dc_service
+      when: inventory_hostname in groups['samba_domain_controllers']
+      check_mode: true
+      changed_when: false
+
+    - name: Verify DC service is active
+      ansible.builtin.assert:
+        that:
+          - dc_service.status.ActiveState == "active"
+      when: inventory_hostname in groups['samba_domain_controllers']
+
+    - name: Check if member services are running
+      ansible.builtin.systemd:
+        name: '{{ item }}'
+      register: member_services
+      when: inventory_hostname in groups['samba_member_servers']
+      check_mode: true
+      changed_when: false
+      loop:
+        - smbd
+        - nmbd
+        - winbind
+
+    - name: Check domain join status on member
+      ansible.builtin.command: net ads testjoin
+      register: testjoin
+      when: inventory_hostname in groups['samba_member_servers']
+      changed_when: false
+      failed_when: false
+
+    - name: Display join status
+      ansible.builtin.debug:
+        msg: 'Domain join test result: {{ testjoin.stdout }}'
+      when:
+        - inventory_hostname in groups['samba_member_servers']
+        - testjoin is defined

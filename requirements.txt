@@ -1,0 +1,17 @@
+# These are the Python requirements needed to run Ansible with the most common
+# features.
+ansible-core>=2.13.9,<=2.18
+ansible-lint
+
+# for common jinja-filters
+netaddr
+jmespath
+lxml
+requests
+
+# for molecule testing with Podman
+molecule
+molecule-plugins[podman]
+molecule-qemu
+pytest-testinfra
+yamllint

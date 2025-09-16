@@ -1,0 +1,47 @@
+---
+- name: Restart Samba service
+  become: true
+  ansible.builtin.systemd_service:
+    name: smbd
+    state: restarted
+  when:
+    - not samba_create_domain_controller|bool
+
+- name: Restart Samba NetBIOS service
+  become: true
+  ansible.builtin.systemd_service:
+    name: nmbd
+    state: restarted
+  when:
+    - not samba_create_domain_controller|bool
+
+- name: Restart Samba winbind service
+  become: true
+  ansible.builtin.systemd_service:
+    name: winbind
+    state: restarted
+  when:
+    - not samba_create_domain_controller|bool
+    - samba_server_role != 'member server' or (samba_server_role == 'member server' and samba_join_domain|bool)
+
+- name: Restart Samba AD Domain Controller service
+  become: true
+  ansible.builtin.systemd_service:
+    name: samba-ad-dc
+    state: restarted
+  when:
+    - samba_create_domain_controller|bool
+
+- name: Restart Clustered TDB
+  become: true
+  ansible.builtin.systemd_service:
+    name: ctdb
+    state: restarted
+  when:
+    - samba_create_cluster|bool
+
+- name: Restart SSH service
+  become: true
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: restarted

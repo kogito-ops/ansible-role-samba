@@ -1,0 +1,59 @@
+---
+- name: Converge Domain Controllers First
+  hosts: samba_domain_controllers
+  serial: 1
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+      when: ansible_os_family == "Debian"
+      changed_when: false
+
+    - name: Include samba role for DCs
+      ansible.builtin.include_role:
+        name: kogito-ops.samba
+
+    - name: Wait for AD services to be fully ready
+      ansible.builtin.wait_for:
+        port: '{{ item }}'
+        host: '0.0.0.0'
+        timeout: 120
+      loop:
+        - 53 # DNS
+        - 88 # Kerberos
+        - 389 # LDAP
+        - 445 # SMB
+
+    - name: Verify AD domain is working
+      ansible.builtin.command: smbclient -L localhost -N
+      register: smb_test
+      failed_when: false
+      changed_when: false
+
+    - name: Display AD status
+      ansible.builtin.debug:
+        msg: 'AD Domain Controller is ready: {{ inventory_hostname }}'
+
+- name: Converge Member Servers
+  hosts: samba_member_servers
+  serial: 1
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+      when: ansible_os_family == "Debian"
+      changed_when: false
+
+    - name: Test connectivity to DC before joining
+      ansible.builtin.wait_for:
+        host: '{{ samba_domain_member.domain_controller }}'
+        port: 389
+        timeout: 60
+
+    - name: Display connectivity info
+      ansible.builtin.debug:
+        msg: 'Testing connectivity to DC: {{ samba_domain_member.domain_controller }}'
+
+    - name: Include samba role for member servers
+      ansible.builtin.include_role:
+        name: kogito-ops.samba

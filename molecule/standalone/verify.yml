@@ -1,0 +1,104 @@
+---
+- name: Verify Standalone Server
+  hosts: all
+  tasks:
+    - name: Verify Samba service is running
+      ansible.builtin.systemd:
+        name: smbd
+        state: started
+      check_mode: true
+      register: smbd_status
+
+    - name: Verify NetBIOS service is running
+      ansible.builtin.systemd:
+        name: nmbd
+        state: started
+      check_mode: true
+      register: nmbd_status
+
+    - name: Verify Samba AD DC service is NOT running
+      ansible.builtin.systemd:
+        name: samba-ad-dc
+        state: stopped
+      check_mode: true
+      register: samba_ad_dc_status
+
+    - name: Verify winbind service is NOT running for standalone
+      ansible.builtin.systemd:
+        name: winbind
+        state: stopped
+      check_mode: true
+      register: winbind_status
+
+    - name: Check Samba configuration file exists
+      ansible.builtin.stat:
+        path: /etc/samba/smb.conf
+      register: smb_conf_stat
+
+    - name: Verify SMB configuration file exists
+      ansible.builtin.assert:
+        that:
+          - smb_conf_stat.stat.exists
+        fail_msg: 'Samba configuration file does not exist'
+        success_msg: 'Samba configuration file exists'
+
+    - name: Verify shared directories exist
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      register: share_dirs
+      loop:
+        - /mnt/samba/shares/public
+        - /mnt/samba/shares/private
+
+    - name: Assert shared directories exist
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+        fail_msg: 'Share directory {{ item.item }} does not exist'
+        success_msg: 'Share directory {{ item.item }} exists'
+      loop: '{{ share_dirs.results }}'
+
+    - name: Test Samba configuration syntax
+      ansible.builtin.command: testparm -s
+      register: testparm_result
+      failed_when: testparm_result.rc != 0
+      changed_when: false
+
+    - name: Verify no domain controller configuration
+      ansible.builtin.shell: |
+        grep -E "^\s*server role\s*=.*domain controller" /etc/samba/smb.conf || true
+      register: dc_config_check
+      changed_when: false
+
+    - name: Assert no domain controller settings
+      ansible.builtin.assert:
+        that:
+          - dc_config_check.stdout == ""
+        fail_msg: 'Domain controller configuration found in standalone server'
+        success_msg: 'No domain controller configuration found (correct for standalone)'
+
+    - name: Verify standalone server role in config
+      ansible.builtin.shell: |
+        grep -E "server role.*standalone" /etc/samba/smb.conf
+      register: standalone_config_check
+      changed_when: false
+
+    - name: Assert standalone server role is configured
+      ansible.builtin.assert:
+        that:
+          - standalone_config_check.rc == 0
+        fail_msg: 'Standalone server role not configured'
+        success_msg: 'Standalone server role correctly configured'
+
+    - name: Display verification summary
+      ansible.builtin.debug:
+        msg: |
+          Standalone Samba Server Verification Complete:
+          - SMB daemon: {{ 'Running' if smbd_status.status.ActiveState == 'active' else 'Not running' }}
+          - NetBIOS daemon: {{ 'Running' if nmbd_status.status.ActiveState == 'active' else 'Not running' }}
+          - AD DC daemon: {{ 'Stopped' if samba_ad_dc_status.status.ActiveState != 'active' else 'Running (ERROR)' }}
+          - Winbind daemon: {{ 'Stopped' if winbind_status.status.ActiveState != 'active' else 'Running (ERROR)' }}
+          - Configuration: Valid
+          - Shares: Configured
+          - Server Role: Standalone

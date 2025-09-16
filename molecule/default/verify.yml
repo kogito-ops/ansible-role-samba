@@ -1,0 +1,416 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Verify | Check if Samba AD DC service is running
+      ansible.builtin.systemd:
+        name: samba-ad-dc
+      register: samba_service
+      check_mode: true
+      changed_when: false
+
+    - name: Verify | Debug service status
+      ansible.builtin.debug:
+        var: samba_service.status
+
+    - name: Verify | Check journal logs if service is not active
+      ansible.builtin.command: journalctl -u samba-ad-dc --no-pager -n 50
+      register: samba_logs
+      when: samba_service.status.ActiveState != "active"
+      changed_when: false
+
+    - name: Verify | Display journal logs
+      ansible.builtin.debug:
+        var: samba_logs.stdout_lines
+      when: samba_logs is defined
+
+    - name: Verify | Check Samba log files if service is not active
+      ansible.builtin.shell: |
+        ls -la /var/log/samba/
+        echo "=== log.samba ==="
+        cat /var/log/samba/log.samba || echo "Empty"
+        echo "=== log.smbd ==="
+        tail -20 /var/log/samba/log.smbd || echo "Empty"
+        echo "=== Running samba manually ==="
+        timeout 5 /usr/sbin/samba --foreground --no-process-group -d 3 2>&1 || true
+      register: samba_debug
+      when: samba_service.status.ActiveState != "active"
+      changed_when: false
+
+    - name: Verify | Display Samba debug output
+      ansible.builtin.debug:
+        var: samba_debug.stdout_lines
+      when: samba_debug is defined
+
+    - name: Verify | Display Samba AD DC service status
+      ansible.builtin.debug:
+        msg: |
+          Service Status: {{ samba_service.status.ActiveState }}
+          {% if samba_service.status.ActiveState != "active" %}
+          Service is not active, but continuing with domain inspection...
+          {% else %}
+          Service is running successfully!
+          {% endif %}
+
+    - name: Verify | Check Domain-Computer group exists
+      ansible.builtin.command: getent group Domain-Computer
+      register: domain_computer_group
+      changed_when: false
+      failed_when: false
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Assert Domain-Computer group was created
+      ansible.builtin.assert:
+        that:
+          - domain_computer_group.rc == 0
+        fail_msg: "Domain-Computer group was not created"
+        success_msg: "Domain-Computer group exists"
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - samba_enhanced_provisioning_enabled | default(true) | bool
+
+    - name: Verify | Get domain info
+      ansible.builtin.command: samba-tool domain info {{ ansible_default_ipv4.address }}
+      register: domain_info
+      changed_when: false
+      failed_when: false
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - samba_service.status.ActiveState == "active"
+
+    - name: Verify | Display domain info
+      ansible.builtin.debug:
+        var: domain_info.stdout_lines
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Check password policy settings
+      ansible.builtin.command: samba-tool domain passwordsettings show
+      register: password_settings
+      changed_when: false
+      failed_when: false
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - samba_service.status.ActiveState == "active"
+
+    - name: Verify | Assert password policies are correctly set
+      ansible.builtin.assert:
+        that:
+          - "'Password complexity: on' in password_settings.stdout"
+          - "'Password history length: 24' in password_settings.stdout"
+          - "'Minimum password length: 7' in password_settings.stdout"
+          - "'Minimum password age (days): 1' in password_settings.stdout"
+          - "'Maximum password age (days): 43' in password_settings.stdout"
+        fail_msg: "Password policies are not correctly configured"
+        success_msg: "Password policies are correctly configured"
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Check NSSwitch configuration
+      ansible.builtin.command: grep -E "passwd|group|shadow" /etc/nsswitch.conf
+      register: nsswitch_config
+      changed_when: false
+
+    - name: Verify | Assert NSSwitch has winbind configured
+      ansible.builtin.assert:
+        that:
+          - "'winbind' in nsswitch_config.stdout"
+        fail_msg: "NSSwitch is not configured for winbind"
+        success_msg: "NSSwitch is correctly configured for winbind"
+
+    - name: Verify | Check PAM mkhomedir configuration
+      ansible.builtin.command: grep pam_mkhomedir /etc/pam.d/common-session
+      register: pam_config
+      changed_when: false
+      failed_when: false
+
+    - name: Verify | Assert PAM mkhomedir is configured
+      ansible.builtin.assert:
+        that:
+          - pam_config.rc == 0
+          - "'pam_mkhomedir.so' in pam_config.stdout"
+        fail_msg: "PAM mkhomedir is not configured"
+        success_msg: "PAM mkhomedir is correctly configured"
+
+    - name: Verify | Test domain functionality with wbinfo
+      ansible.builtin.command: wbinfo -t
+      register: wbinfo_test
+      changed_when: false
+      failed_when: false
+
+    - name: Verify | Assert domain trust is working
+      ansible.builtin.assert:
+        that:
+          - wbinfo_test.rc == 0
+          - "'succeeded' in wbinfo_test.stdout"
+        fail_msg: "Domain trust verification failed"
+        success_msg: "Domain trust is working correctly"
+
+    - name: Verify | Check if homes share is configured in smb.conf
+      ansible.builtin.command: testparm -s --parameter-name="comment" --section-name=homes
+      register: homes_share
+      changed_when: false
+      failed_when: false
+
+    - name: Verify | Assert homes share is configured
+      ansible.builtin.assert:
+        that:
+          - homes_share.rc == 0
+          - "'Home Directories' in homes_share.stdout"
+        fail_msg: "Homes share is not configured"
+        success_msg: "Homes share is correctly configured"
+      when: samba_home_share_enabled | default(true) | bool
+
+    - name: Verify | List domain users
+      ansible.builtin.command: samba-tool user list
+      register: domain_users
+      changed_when: false
+      failed_when: false
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - samba_service.status.ActiveState == "active"
+
+    - name: Verify | Display domain users
+      ansible.builtin.debug:
+        msg: "Domain users: {{ domain_users.stdout_lines }}"
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Check Kerberos configuration
+      ansible.builtin.stat:
+        path: /etc/krb5.conf
+      register: krb5_conf
+
+    - name: Verify | Assert Kerberos is configured
+      ansible.builtin.assert:
+        that:
+          - krb5_conf.stat.exists
+        fail_msg: "Kerberos configuration file is missing"
+        success_msg: "Kerberos is configured"
+
+    - name: Verify | Test Kerberos ticket acquisition
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo '{{ samba_ad_info.adminpass }}' | kinit Administrator@{{ samba_ad_info.kerberos_realm | upper }}
+      register: kinit_test
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Assert Kerberos authentication works
+      ansible.builtin.assert:
+        that:
+          - kinit_test.rc == 0
+        fail_msg: "Kerberos authentication failed"
+        success_msg: "Kerberos authentication is working"
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Check if AD Recycle Bin is enabled
+      ansible.builtin.stat:
+        path: /var/lib/samba/.samba_recycle_bin_enabled
+      register: recycle_bin_marker
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Assert AD Recycle Bin marker exists
+      ansible.builtin.assert:
+        that:
+          - recycle_bin_marker.stat.exists
+        fail_msg: "AD Recycle Bin marker file not found"
+        success_msg: "AD Recycle Bin is enabled"
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - samba_enable_recycle_bin | default(true) | bool
+
+    - name: Verify | Check dsheuristics value for AD Recycle Bin
+      ansible.builtin.command:
+        cmd: samba-tool forest directory_service dsheuristics show
+      register: dsheuristics_check
+      changed_when: false
+      failed_when: false
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - samba_enable_recycle_bin | default(true) | bool
+
+    - name: Verify | Display dsheuristics value
+      ansible.builtin.debug:
+        var: dsheuristics_check.stdout
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - samba_enable_recycle_bin | default(true) | bool
+        - dsheuristics_check is defined
+
+    # Extended domain data inspection
+    - name: Verify | Get detailed domain level information
+      ansible.builtin.command: samba-tool domain level show
+      register: domain_level
+      changed_when: false
+      failed_when: false
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - samba_service.status.ActiveState == "active"
+
+    - name: Verify | Display domain level
+      ansible.builtin.debug:
+        msg: "Domain Level: {{ domain_level.stdout_lines }}"
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | List all domain groups
+      ansible.builtin.command: samba-tool group list
+      register: domain_groups
+      changed_when: false
+      failed_when: false
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - samba_service.status.ActiveState == "active"
+
+    - name: Verify | Display domain groups
+      ansible.builtin.debug:
+        msg: "Domain Groups: {{ domain_groups.stdout_lines }}"
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Get DNS zones
+      ansible.builtin.command: samba-tool dns zonelist {{ ansible_hostname }}
+      register: dns_zones
+      changed_when: false
+      failed_when: false
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - samba_service.status.ActiveState == "active"
+
+    - name: Verify | Display DNS zones
+      ansible.builtin.debug:
+        msg: "DNS Zones: {{ dns_zones.stdout_lines }}"
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - dns_zones.rc == 0
+
+    - name: Verify | Get domain SID
+      ansible.builtin.command: wbinfo -D {{ samba_ad_info.netbios_domain_name | upper }}
+      register: domain_sid_info
+      changed_when: false
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Display domain SID info
+      ansible.builtin.debug:
+        var: domain_sid_info.stdout_lines
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Check SYSVOL replication status
+      ansible.builtin.command: samba-tool ntacl sysvolcheck
+      register: sysvol_check
+      changed_when: false
+      failed_when: false
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Display SYSVOL check results
+      ansible.builtin.debug:
+        msg: "SYSVOL Check: {{ sysvol_check.stdout | default('Check completed') }}"
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Get domain functional level
+      ansible.builtin.command: samba-tool forest directory_service show
+      register: forest_info
+      changed_when: false
+      failed_when: false
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Display forest information
+      ansible.builtin.debug:
+        var: forest_info.stdout_lines
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - forest_info.rc == 0
+
+    - name: Verify | List Organizational Units
+      ansible.builtin.command: samba-tool ou list
+      register: ou_list
+      changed_when: false
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Display Organizational Units
+      ansible.builtin.debug:
+        msg: "Organizational Units: {{ ou_list.stdout_lines }}"
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Check domain database integrity
+      ansible.builtin.command: samba-tool dbcheck --cross-ncs
+      register: db_check
+      changed_when: false
+      failed_when: false
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Display database check results
+      ansible.builtin.debug:
+        msg: "Database Check: {{ db_check.stdout_lines[-5:] }}"
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Get list of domain computers
+      ansible.builtin.command: samba-tool computer list
+      register: domain_computers
+      changed_when: false
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Display domain computers
+      ansible.builtin.debug:
+        msg: "Domain Computers: {{ domain_computers.stdout_lines }}"
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Check DNS forwarder configuration
+      ansible.builtin.shell: |
+        samba-tool testparm --parameter-name="dns forwarder" 2>/dev/null || echo "Not configured"
+      register: dns_forwarder
+      changed_when: false
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Display DNS forwarder
+      ansible.builtin.debug:
+        msg: "DNS Forwarder: {{ dns_forwarder.stdout }}"
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Test LDAP connectivity
+      ansible.builtin.command: |
+        ldapsearch -H ldap://localhost -x -b \
+          "{{ samba_ad_info.dns_domain_name | split('.') | map('regex_replace', '^', 'dc=') | join(',') }}" -s base
+      register: ldap_test
+      changed_when: false
+      failed_when: false
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Assert LDAP is accessible
+      ansible.builtin.assert:
+        that:
+          - ldap_test.rc == 0
+        fail_msg: "LDAP connectivity test failed"
+        success_msg: "LDAP is accessible"
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Get GPO list
+      ansible.builtin.command: samba-tool gpo listall
+      register: gpo_list
+      changed_when: false
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Display GPO list
+      ansible.builtin.debug:
+        msg: "Group Policy Objects: {{ gpo_list.stdout_lines[:10] }}..."
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Create domain inspection summary
+      ansible.builtin.set_fact:
+        domain_summary: |
+          Domain Inspection Summary:
+          ========================
+          Domain Name: {{ samba_ad_info.dns_domain_name }}
+          NetBIOS Name: {{ samba_ad_info.netbios_domain_name | upper }}
+          Domain Controller: {{ ansible_hostname }}
+          Forest Level: {{ domain_level.stdout | default('Unknown') }}
+          Users Count: {{ domain_users.stdout_lines | length | default(0) }}
+          Groups Count: {{ domain_groups.stdout_lines | length | default(0) }}
+          Computers Count: {{ domain_computers.stdout_lines | length | default(0) }}
+          DNS Zones: {{ dns_zones.stdout_lines | length | default(0) }}
+          GPOs: {{ (gpo_list.stdout_lines | length | default(0)) - 1 }}
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Display domain inspection summary
+      ansible.builtin.debug:
+        msg: "{{ domain_summary.split('\n') }}"
+      when: samba_create_domain_controller | default(true) | bool

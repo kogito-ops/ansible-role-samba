@@ -1,0 +1,188 @@
+---
+# Retrieve current password policy settings
+- name: Password Policy | Get current password settings
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool domain passwordsettings show
+  register: current_password_settings
+  changed_when: false
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - samba_server_role == "active directory domain controller"
+    - _samba_domain_exists | default(false)
+  tags:
+    - samba
+    - samba-ad
+    - samba-policies
+
+# Parse current settings
+- name: Password Policy | Parse current settings
+  ansible.builtin.set_fact:
+    _current_password_policy:
+      complexity: >-
+        {{ current_password_settings.stdout | regex_search('Password complexity: (on|off)', '\\1')
+           | default(['off']) | first }}
+
+      history_length: >-
+        {{ current_password_settings.stdout | regex_search('Password history length: (\\d+)', '\\1')
+           | default(['0']) | first }}
+
+      min_length: >-
+        {{ current_password_settings.stdout | regex_search('Minimum password length: (\\d+)', '\\1')
+           | default(['0']) | first }}
+
+      min_age: >-
+        {{ current_password_settings.stdout | regex_search('Minimum password age \\(days\\): (\\d+)', '\\1')
+           | default(['0']) | first }}
+
+      max_age: >-
+        {{ current_password_settings.stdout | regex_search('Maximum password age \\(days\\): (\\d+)', '\\1')
+           | default(['0']) | first }}
+
+      lockout_duration: >-
+        {{ current_password_settings.stdout | regex_search('Account lockout duration \\(mins\\): (\\d+)', '\\1')
+           | default(['0']) | first }}
+
+      lockout_threshold: >-
+        {{ current_password_settings.stdout | regex_search('Account lockout threshold \\(attempts\\): (\\d+)', '\\1')
+           | default(['0']) | first }}
+
+      reset_lockout_after: >-
+        {{ current_password_settings.stdout | regex_search('Reset account lockout after \\(mins\\): (\\d+)', '\\1')
+           | default(['0']) | first }}
+
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - samba_server_role == "active directory domain controller"
+    - _samba_domain_exists | default(false)
+    - current_password_settings is defined
+  tags:
+    - samba
+    - samba-ad
+    - samba-policies
+
+# Determine if password policy needs updating
+- name: Password Policy | Check if password policy needs updating
+  ansible.builtin.set_fact:
+    _password_policy_needs_update: >-
+      {{
+        (_current_password_policy.complexity !=
+         (samba_password_policy.complexity_enabled | bool | ternary('on', 'off'))) or
+        (_current_password_policy.history_length | int != samba_password_policy.history_length | int) or
+        (_current_password_policy.min_length | int != samba_password_policy.min_length | int) or
+        (_current_password_policy.min_age | int != samba_password_policy.min_age | int) or
+        (_current_password_policy.max_age | int != samba_password_policy.max_age | int)
+      }}
+
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - samba_server_role == "active directory domain controller"
+    - _samba_domain_exists | default(false)
+    - _current_password_policy is defined
+  tags:
+    - samba
+    - samba-ad
+    - samba-policies
+
+# Apply password policy only if different
+- name: Password Policy | Apply password policy settings
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      samba-tool domain passwordsettings set
+      --complexity={{ samba_password_policy.complexity_enabled | bool | ternary('on', 'off') }}
+      --history-length={{ samba_password_policy.history_length }}
+      --max-pwd-age={{ samba_password_policy.max_age }}
+      --min-pwd-age={{ samba_password_policy.min_age }}
+      --min-pwd-length={{ samba_password_policy.min_length }}
+
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  changed_when: _password_policy_needs_update | default(false)
+  when:
+    - samba_server_role == "active directory domain controller"
+    - _samba_domain_exists | default(false)
+    - _password_policy_needs_update | default(false)
+  tags:
+    - samba
+    - samba-ad
+    - samba-policies
+
+# Determine if account lockout policy needs updating
+- name: Account Policy | Check if account lockout policy needs updating
+  ansible.builtin.set_fact:
+    _account_policy_needs_update: >-
+      {{
+        (samba_account_policy.lockout_threshold | int > 0) and (
+          (_current_password_policy.lockout_duration | int != samba_account_policy.lockout_duration | int) or
+          (_current_password_policy.lockout_threshold | int != samba_account_policy.lockout_threshold | int) or
+          (_current_password_policy.reset_lockout_after | int != samba_account_policy.reset_lockout_after | int)
+        )
+      }}
+
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - samba_server_role == "active directory domain controller"
+    - _samba_domain_exists | default(false)
+    - _current_password_policy is defined
+  tags:
+    - samba
+    - samba-ad
+    - samba-policies
+
+# Apply account lockout policy only if different
+- name: Account Policy | Apply account lockout policy
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      samba-tool domain passwordsettings set
+      --account-lockout-duration={{ samba_account_policy.lockout_duration }}
+      --account-lockout-threshold={{ samba_account_policy.lockout_threshold }}
+      --reset-account-lockout-after={{ samba_account_policy.reset_lockout_after }}
+
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  changed_when: _account_policy_needs_update | default(false)
+  when:
+    - samba_server_role == "active directory domain controller"
+    - _samba_domain_exists | default(false)
+    - _account_policy_needs_update | default(false)
+  tags:
+    - samba
+    - samba-ad
+    - samba-policies
+
+# Display current settings for verification
+- name: Password Policy | Display applied settings
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool domain passwordsettings show
+  register: final_password_settings
+  changed_when: false
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - samba_server_role == "active directory domain controller"
+    - _samba_domain_exists | default(false)
+    - (_password_policy_needs_update | default(false)) or (_account_policy_needs_update | default(false))
+  tags:
+    - samba
+    - samba-ad
+    - samba-policies
+
+- name: Password Policy | Show final settings
+  ansible.builtin.debug:
+    msg: '{{ final_password_settings.stdout_lines }}'
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - final_password_settings is defined
+    - final_password_settings.stdout_lines is defined
+  tags:
+    - samba
+    - samba-ad
+    - samba-policies

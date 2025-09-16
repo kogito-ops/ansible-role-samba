@@ -1,0 +1,301 @@
+---
+# Defines server role
+# (standalone server, active directory domain controller, or member server)
+samba_server_role: standalone server
+
+# Defines if you are building an Active Directory domain controller
+samba_create_domain_controller: false
+
+# Defines if the server should join a domain as a member server
+samba_join_domain: false
+
+# Legacy domain controller support
+# Enable this for joining legacy domain controllers that don't support encrypted LDAP
+# Common scenarios:
+#   - Legacy Samba DCs running in containerized environments (Kubernetes/Docker)
+#   - Older Windows Server versions with limited encryption support
+#   - Network environments with SSL/TLS termination at load balancers
+# WARNING: This reduces security by disabling LDAP encryption and strong authentication
+# Only enable this when absolutely necessary for compatibility
+samba_allow_unencrypted_ldap: false
+
+# Domain member specific settings
+samba_domain_member:
+  domain: '{{ samba_primary_domain }}'
+  workgroup: '{{ samba_workgroup }}'
+  realm: '{{ samba_primary_domain | upper }}'
+  domain_admin_user: Administrator
+  domain_admin_password: ChangeMe123! # SECURITY: Use Ansible Vault in production
+  domain_controller: '{{ samba_primary_domain_controller }}' # or DNS name
+  id_mapping:
+    backend: rid # Options: rid, autorid, ad, tdb
+    range_min: 10000
+    range_max: 999999
+
+# Defines if groups defined in samba_domain_groups list should be created
+samba_create_domain_groups: false
+
+# Defines if users defined in samba_domain_users list should be created
+samba_create_domain_users: false
+
+# Define Ansible group which contains your Samba domain controllers
+samba_domain_controllers_group: samba_domain_controllers
+
+# Define which Ansible host should be considered the primary domain controller
+samba_primary_domain_controller: '{{ groups[samba_domain_controllers_group][0] }}'
+
+# Defines the domain controller default IP address
+samba_domain_controller_ip: '{{ ansible_default_ipv4.address }}'
+
+# Defines if Samba TDB is replaced with clustered TDB
+samba_create_cluster: false
+
+samba_primary_domain: samba.internal
+samba_netbios_domain_name: "{{ samba_primary_domain.split('.') }}"
+
+# Defines Samba AD configuration
+# WARNING: The default passwords below are for demonstration only!
+# For production use, please use Ansible Vault to encrypt sensitive data:
+# ansible-vault encrypt_string 'your-secure-password' --name 'samba_ad_info.adminpass'
+samba_ad_info:
+  ad_dc_hostname: '{{ ansible_hostname }}'
+  ad_dc_fqdn: '{{ ansible_fqdn }}'
+  ad_dns_domain_name: '{{ samba_primary_domain }}'
+  adminpass: ChangeMe123! # SECURITY: Use Ansible Vault in production
+  machinepass: ChangeMeToo456! # SECURITY: Use Ansible Vault in production
+  allow_dns_updates: disabled
+  backend_dns: SAMBA_INTERNAL
+  dns_forwarder: 8.8.8.8
+  kerberos_realm: '{{ samba_primary_domain }}'
+  netbios_domain_name: '{{ samba_netbios_domain_name[0] | upper }}'
+
+# Defines workgroup for standalone server
+samba_workgroup: '{{ samba_netbios_domain_name[0] | upper }}'
+
+# Define additional startup options for the Samba service(s)
+samba_extra_options: ''
+
+# Define groups to create
+samba_local_groups:
+  []
+  # - test-group
+  # - secure-group
+  # - insecure-group
+
+# Define users to create with group memberships
+samba_local_users:
+  []
+  # - name: test-user
+  #   # Define samba user password
+  #   smbpasswd: P@55w0rd
+  #   # Define groups to add user to
+  #   # ensure samba_groups names exist.
+  #   groups:
+  #       - test-group
+  #       - insecure-group
+
+# Enable to hide groups output
+samba_local_groups_no_log: true
+
+# Enable to hide users output
+samba_local_users_no_log: true
+
+# Define the path where Samba will manage shared/exported directories
+samba_shares_path: /mnt/samba/shares
+
+# Define the path where Samba will manage user profiles
+samba_profiles_path: /mnt/samba/profiles
+
+samba_shares:
+  []
+  # - name: allaccess
+  #   owner: nobody
+  #   group: nogroup
+  #   mode: '0755'
+  #   browsable: 'yes'
+  #   guest_ok: 'yes'
+  #   read_only: 'no'
+  #   writable: 'yes'
+  # - name: public
+  #   owner: nobody
+  #   group: nogroup
+  #   mode: '0777'
+  #   browsable: 'yes'
+  #   guest_ok: 'yes'
+  #   read_only: 'no'
+  #   writable: 'yes'
+  # - name: secured
+  #   group: secure-group
+  #   mode: '0770'
+  #   browsable: 'yes'
+  #   guest_ok: 'no'
+  #   valid_users: '@secure-group'
+  #   writable: 'yes'
+
+# Enable to hide users output
+samba_domain_users_no_log: true
+
+samba_domain_users:
+  []
+  # - name: test01
+  #   password: P@55w0rd
+  # - name: test02
+  #   password: P@55w0rd
+
+# Enable to hide groups output
+samba_domain_groups_no_log: true
+
+samba_domain_groups:
+  []
+  # - name: ad-test-group1
+  #   members:
+  #       - test01
+  #       - test02
+
+samba_security: user
+
+# Defines if transport encryption should be enabled
+samba_tls_enable: false
+
+# Defines the private key used for transport encryption
+samba_tls_key: /etc/ssl/private/samba.key
+
+# Defines the public key used for transport encryption
+samba_tls_certificate: /etc/ssl/certs/samba.crt
+
+# Defines the file containing known CA certificates
+samba_tls_ca_certificate: /etc/ssl/certs/ca-certificates.crt
+
+# PAM and home directory settings
+# Enable PAM mkhomedir module for automatic home directory creation
+samba_pam_mkhomedir_enabled: true
+samba_home_path: /home
+samba_home_umask: '0022'
+# Enable Samba share for home directories
+# When enabled, a 'homes' share will be automatically configured
+samba_home_share_enabled: true
+
+# SSH access control for AD groups/users
+samba_ssh_allow_groups:
+  - 'Domain Admins'
+  - 'SSH Users'
+  # - "Linux Admins"
+samba_ssh_deny_groups:
+  - 'Domain Guests'
+  # - "Contractors"
+samba_ssh_allow_users:
+  []
+  # - "admin@{{ samba_primary_domain }}"
+samba_ssh_deny_users:
+  []
+  # - "guest@{{ samba_primary_domain }}"
+
+# Password Policy Settings
+samba_password_policy:
+  complexity_enabled: true
+  history_length: 24
+  max_age: 43 # days
+  min_age: 1 # days
+  min_length: 7
+
+# Account Lockout Policy
+samba_account_policy:
+  lockout_duration: 30 # minutes
+  lockout_threshold: 0 # 0 = disabled
+  reset_lockout_after: 30 # minutes
+
+# Enhanced Domain Provisioning Options
+# Enable enhanced security settings during domain provisioning
+samba_enhanced_provisioning_enabled: true
+samba_rpc_port_range: '49152-65535' # Dynamic RPC port range
+samba_security_options:
+  reject_md5_clients: true
+  reject_md5_servers: true
+  require_strong_auth: true
+  password_hash_schemes:
+    - CryptSHA256
+    - CryptSHA512
+
+# AD Recycle Bin
+samba_enable_recycle_bin: true
+
+# System directories (used in templates)
+# Data directory for Samba databases
+samba_datadir: /var/lib/samba
+# Log directory for Samba logs
+samba_logdir: /var/log/samba
+# Spool directory for print jobs
+samba_spooldir: /var/spool/samba
+# State directory for Samba state files
+samba_statedir: /var/lib/samba
+# systemd-resolved configuration directory
+samba_systemd_resolveddir: /etc/systemd/resolved.conf.d
+# Kerberos configuration file path
+samba_krb5_conf: /etc/krb5.conf
+# System log directory
+samba_system_logdir: /var/log
+
+# System paths
+# Path to useradd command
+samba_useradd_command: /usr/sbin/useradd
+# Path to groupadd command
+samba_groupadd_command: /usr/sbin/groupadd
+# Path to usermod command
+samba_usermod_command: /usr/sbin/usermod
+# Path to passwd command
+samba_passwd_command: /usr/bin/passwd
+# Path to pdbedit command
+samba_pdbedit_command: /usr/bin/pdbedit
+# Shell for system accounts
+samba_system_shell: /bin/false
+# Home directory for system accounts
+samba_system_homedir: /dev/null
+
+# Network settings
+# LDAP port for domain controller connectivity
+samba_ldap_port: 389
+# Timeout for waiting for domain controller (in seconds)
+samba_wait_timeout: 120
+
+# Recycle bin settings
+# dsheuristics value for enabling recycle bin
+samba_dsheuristics_value: '0000002'
+# Administrator account for recycle bin operations
+samba_recycle_bin_admin: Administrator
+
+# Kerberos configuration
+# Ticket lifetime (in hours)
+samba_krb5_ticket_lifetime: 24h
+# Renewable ticket lifetime (in days)
+samba_krb5_renew_lifetime: 7d
+# Supported encryption types
+samba_krb5_enctypes:
+  - aes256-cts-hmac-sha1-96
+  - aes128-cts-hmac-sha1-96
+
+# CTDB clustering configuration
+# Log destination (syslog or file path)
+samba_ctdb_log_destination: syslog
+# Log level (EMERG, ALERT, CRIT, ERR, WARNING, NOTICE, INFO, DEBUG)
+samba_ctdb_log_level: NOTICE
+
+# Samba configuration
+# Server description string
+samba_server_string: '(Samba, Ubuntu)'
+# Maximum log file size in KB
+samba_max_log_size: 1000
+# Password chat string for passwd program
+samba_passwd_chat: "*Enter\\snew\\s*\\spassword:* %n\\n *Retype\\snew\\s*\\spassword:* %n\\n *password\\supdated\\ssuccessfully* ." # yamllint disable-line rule:line-length
+# File creation masks
+samba_create_mask: '0600'
+samba_directory_mask: '0700'
+samba_force_create_mode: '0775'
+samba_force_directory_mode: '0775'
+# Home directory permissions
+samba_home_create_mask: '0700'
+samba_home_directory_mask: '0700'
+# Profile directory permissions
+samba_profiles_create_mask: '0700'
+samba_profiles_directory_mask: '0700'
+# Printer spool permissions
+samba_printers_create_mask: '0700'

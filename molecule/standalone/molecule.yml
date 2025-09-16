@@ -1,0 +1,63 @@
+---
+dependency:
+  name: galaxy
+driver:
+  name: molecule-qemu
+scenario:
+  name: standalone
+platforms:
+  - name: standalone-server
+    hostname: standalone-server.samba.internal
+    image_url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+    image_checksum: sha256:https://cloud-images.ubuntu.com/jammy/current/SHA256SUMS
+    image_arch: x86_64
+    ssh_port: 10022
+    ssh_user: ubuntu
+    memory: 2048
+    cpus: 2
+    disk_size: 20G
+    network_mode: user
+    network_extra_args: hostfwd=tcp::10139-:139,hostfwd=tcp::10445-:445
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      host_key_checking: false
+      callback_whitelist: timer,profile_tasks
+  inventory:
+    host_vars:
+      standalone-server:
+        samba_server_role: standalone server
+        samba_create_domain_controller: false
+        samba_workgroup: WORKGROUP
+        samba_netbios_name: STANDALONE
+        samba_server_string: 'Samba Standalone Server'
+        samba_security: user
+        samba_passdb_backend: tdbsam
+        samba_shares:
+          - name: public
+            comment: 'Public Share'
+            browsable: true
+            writable: true
+            guest_ok: true
+            owner: nobody
+            group: nogroup
+            mode: '0755'
+          - name: private
+            comment: 'Private Share'
+            browsable: false
+            writable: true
+            guest_ok: false
+            valid_users: '@sambausers'
+            owner: root
+            group: root
+            mode: '0750'
+        samba_users:
+          - name: testuser
+            password: '${MOLECULE_TEST_USER_PASS:-TestUserPass123!}'
+            groups:
+              - sambausers
+        samba_groups:
+          - name: sambausers
+verifier:
+  name: ansible

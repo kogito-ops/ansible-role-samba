@@ -1,0 +1,101 @@
+---
+- name: Member join | Configure Kerberos for domain member
+  become: true
+  ansible.builtin.template:
+    src: etc/krb5-member.conf.j2
+    dest: '{{ samba_krb5_conf }}'
+    owner: root
+    group: root
+    mode: '0644'
+  tags:
+    - samba
+    - samba-member
+    - samba-kerberos
+
+- name: Member join | Check if already joined to domain
+  ansible.builtin.stat:
+    path: '{{ samba_statedir }}/.samba_domain_joined'
+  register: samba_member_joined_check
+  tags:
+    - samba
+    - samba-member
+
+- name: Member join | Display domain join info
+  ansible.builtin.debug:
+    msg: 'Preparing to join domain: {{ samba_domain_member.domain }}'
+  when:
+    - not samba_member_joined_check.stat.exists
+  tags:
+    - samba
+    - samba-member
+
+- name: Member join | Wait for domain controller to be ready
+  ansible.builtin.wait_for:
+    host: '{{ samba_domain_member.domain_controller }}'
+    port: '{{ samba_ldap_port | default(389) }}'
+    timeout: '{{ samba_wait_timeout | default(120) }}'
+    delay: 5
+  when:
+    - not samba_member_joined_check.stat.exists
+  tags:
+    - samba
+    - samba-member
+
+- name: Member join | Test Kerberos connectivity
+  ansible.builtin.command: kinit -k {{ samba_domain_member.domain_admin_user }}@{{ samba_domain_member.realm | upper }}
+  register: kinit_test
+  failed_when: false
+  changed_when: false
+  when:
+    - not samba_member_joined_check.stat.exists
+  tags:
+    - samba
+    - samba-member
+    - samba-kerberos
+
+- name: Member join | Join domain as member server
+  become: true
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      echo '{{ samba_domain_member.domain_admin_password }}' | net ads join {{ samba_domain_member.domain }} \
+        -U {{ samba_domain_member.domain_admin_user }}@{{ samba_domain_member.realm | upper }}
+  no_log: true
+  register: _samba_member_joined
+  failed_when:
+    - _samba_member_joined.rc != 0
+    - '"Joined" not in _samba_member_joined.stdout'
+    - '"already joined" not in _samba_member_joined.stderr'
+  retries: 3
+  delay: 10
+  until: _samba_member_joined is not failed
+  when:
+    - not samba_member_joined_check.stat.exists
+  changed_when: "'Joined' in _samba_member_joined.stdout"
+  tags:
+    - samba
+    - samba-member
+
+- name: Member join | Mark as joined to domain
+  become: true
+  ansible.builtin.file:
+    path: '{{ samba_statedir }}/.samba_domain_joined'
+    state: touch
+    mode: '0644'
+  when:
+    - not samba_member_joined_check.stat.exists
+    - _samba_member_joined is changed
+  tags:
+    - samba
+    - samba-member
+
+- name: Member join | Notify winbind restart # noqa: no-handler
+  ansible.builtin.command: /bin/true
+  when:
+    - _samba_member_joined is changed
+  notify: Restart Samba winbind service
+  changed_when: _samba_member_joined is changed
+  tags:
+    - samba
+    - samba-member
+    - samba-service

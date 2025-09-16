@@ -1,0 +1,56 @@
+---
+extends: default
+
+rules:
+    braces:
+        min-spaces-inside: 0
+        max-spaces-inside: 1
+        min-spaces-inside-empty: 0
+        level: error
+    brackets:
+        min-spaces-inside: 0
+        max-spaces-inside: 2
+        min-spaces-inside-empty: 0
+        level: error
+    colons:
+        max-spaces-after: -1
+        level: error
+    commas:
+        max-spaces-after: -1
+        level: error
+    comments:
+        min-spaces-from-content: 1
+        require-starting-space: true
+    comments-indentation: false
+    document-start:
+        level: warning
+        ignore: |
+            **/**/vault.yaml
+            **/**/vault-*.yaml
+    empty-lines:
+        max: 3
+        level: error
+    hyphens:
+        level: error
+    indentation:
+        spaces: consistent
+        indent-sequences: true
+        check-multi-line-strings: false
+    line-length:
+        max: 120
+        level: warning
+    new-lines:
+        type: unix
+    truthy:
+        allowed-values:
+            - 'true'
+            - 'false'
+    octal-values:
+        forbid-implicit-octal: true
+        forbid-explicit-octal: true
+
+ignore: |
+    .ansible/**/**
+    .github/**/**
+    .venv/**/**
+    docs/**/**

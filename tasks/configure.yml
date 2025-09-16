@@ -1,0 +1,91 @@
+---
+- name: Ensure worker configuration directory exists
+  become: true
+  ansible.builtin.file:
+    path: '{{ samba_systemd_resolveddir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - samba_create_domain_controller is defined
+    - samba_create_domain_controller | bool
+    - samba_server_role == "active directory domain controller"
+    - samba_ad_info['backend_dns'] == 'SAMBA_INTERNAL'
+  tags:
+    - samba
+    - samba-configure
+
+- name: Configuration | Enable Samba as DNS resolver
+  become: true
+  ansible.builtin.template:
+    src: etc/systemd/resolved.conf.d/samba.conf.j2
+    dest: '{{ samba_systemd_resolveddir }}/samba.conf'
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - samba_create_domain_controller is defined
+    - samba_create_domain_controller | bool
+    - samba_server_role == "active directory domain controller"
+    - samba_ad_info['backend_dns'] == 'SAMBA_INTERNAL'
+  tags:
+    - samba
+    - samba-configure
+
+- name: Configuration | Configure Clustered TDB
+  become: true
+  ansible.builtin.template:
+    src: etc/ctdb/ctdb.conf.j2
+    dest: /etc/ctdb/ctdb.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - samba_create_cluster | bool
+  notify:
+    - Restart Clustered TDB
+  tags:
+    - samba
+    - samba-configure
+
+- name: Configuration | Configure Samba extra options
+  become: true
+  ansible.builtin.template:
+    src: etc/default/samba.j2
+    dest: /etc/default/samba
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Restart Samba service
+    - Restart Samba NetBIOS service
+    - Restart Samba winbind service
+    - Restart Samba AD Domain Controller service
+  tags:
+    - samba
+    - samba-configure
+
+- name: Configuration | Configure Samba
+  become: true
+  ansible.builtin.template:
+    src: etc/samba/smb.conf.j2
+    dest: /etc/samba/smb.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Restart Samba service
+    - Restart Samba NetBIOS service
+    - Restart Samba winbind service
+    - Restart Samba AD Domain Controller service
+  tags:
+    - samba
+    - samba-configure
+
+- name: Configuration | Configure NSSwitch and PAM
+  ansible.builtin.include_tasks: nsswitch_pam.yml
+  when: samba_server_role in ['active directory domain controller', 'member server']
+  tags:
+    - samba
+    - samba-configure

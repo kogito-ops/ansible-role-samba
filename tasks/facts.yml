@@ -1,0 +1,46 @@
+---
+- name: Facts | Setting Fact For Samba distributed backend storage
+  ansible.builtin.set_fact:
+    _samba_backend_store: ctdb
+  when:
+    - samba_create_cluster|bool
+  tags:
+    - samba
+    - samba-facts
+
+- name: Facts | Setting Fact For Samba local backend storage
+  ansible.builtin.set_fact:
+    _samba_backend_store: tdb
+  when:
+    - not samba_create_cluster|bool
+  tags:
+    - samba
+    - samba-facts
+
+- name: Facts | Setting fact for Samba AD primary domain controller
+  ansible.builtin.set_fact:
+    _is_samba_ad_domain_controller_primary: true
+    _is_samba_ad_domain_controller_secondary: false
+  when:
+    - samba_create_domain_controller is defined
+    - samba_create_domain_controller|bool
+    - samba_server_role == "active directory domain controller"
+    - inventory_hostname == samba_primary_domain_controller
+  tags:
+    - samba
+    - samba-facts
+    - samba-ad
+
+- name: Facts | Setting fact for Samba AD secondary domain controller state
+  ansible.builtin.set_fact:
+    _is_samba_ad_domain_controller_primary: false
+    _is_samba_ad_domain_controller_secondary: true
+  when:
+    - samba_create_domain_controller is defined
+    - samba_create_domain_controller|bool
+    - samba_server_role == "active directory domain controller"
+    - inventory_hostname != samba_primary_domain_controller
+  tags:
+    - samba
+    - samba-facts
+    - samba-ad

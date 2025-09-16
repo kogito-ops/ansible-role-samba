@@ -1,0 +1,111 @@
+---
+# Configure NSSwitch for winbind integration
+- name: Configure NSSwitch for domain integration
+  ansible.builtin.template:
+    src: etc/nsswitch.conf.j2
+    dest: /etc/nsswitch.conf
+    owner: root
+    group: root
+    mode: '0644'
+    backup: true
+  when: samba_server_role in ['active directory domain controller', 'member server']
+  tags:
+    - samba
+    - samba-auth
+    - samba-pam
+
+# Configure PAM for automatic home directory creation
+- name: Ensure pam_mkhomedir is configured in common-session
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    line: 'session optional        pam_mkhomedir.so skel=/etc/skel umask={{ samba_home_umask }}'
+    regexp: '^session\s+.*pam_mkhomedir\.so'
+    insertafter: '^session\s+required\s+pam_unix\.so'
+    state: present
+    backup: true
+  when:
+    - samba_pam_mkhomedir_enabled|bool
+    - samba_server_role in ['active directory domain controller', 'member server']
+  tags:
+    - samba
+    - samba-auth
+    - samba-pam
+
+# Check if SSH is installed
+- name: Check if SSH configuration file exists
+  ansible.builtin.stat:
+    path: /etc/ssh/sshd_config
+  register: ssh_config_stat
+  tags:
+    - samba
+    - samba-auth
+    - samba-pam
+
+# Configure SSH access control for AD groups
+- name: Configure SSH to allow specific AD groups
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    line: "AllowGroups {{ samba_ssh_allow_groups | map('quote') | join(' ') }}"
+    regexp: '^AllowGroups'
+    state: present
+    backup: true
+  when:
+    - ssh_config_stat.stat.exists
+    - samba_ssh_allow_groups | length > 0
+    - samba_server_role in ['active directory domain controller', 'member server']
+  notify: Restart SSH service
+  tags:
+    - samba
+    - samba-auth
+    - samba-pam
+
+- name: Configure SSH to deny specific AD groups
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    line: "DenyGroups {{ samba_ssh_deny_groups | map('quote') | join(' ') }}"
+    regexp: '^DenyGroups'
+    state: present
+    backup: true
+  when:
+    - ssh_config_stat.stat.exists
+    - samba_ssh_deny_groups | length > 0
+    - samba_server_role in ['active directory domain controller', 'member server']
+  notify: Restart SSH service
+  tags:
+    - samba
+    - samba-auth
+    - samba-pam
+
+- name: Configure SSH to allow specific AD users
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    line: "AllowUsers {{ samba_ssh_allow_users | map('quote') | join(' ') }}"
+    regexp: '^AllowUsers'
+    state: present
+    backup: true
+  when:
+    - ssh_config_stat.stat.exists
+    - samba_ssh_allow_users | length > 0
+    - samba_server_role in ['active directory domain controller', 'member server']
+  notify: Restart SSH service
+  tags:
+    - samba
+    - samba-auth
+    - samba-pam
+
+- name: Configure SSH to deny specific AD users
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    line: "DenyUsers {{ samba_ssh_deny_users | map('quote') | join(' ') }}"
+    regexp: '^DenyUsers'
+    state: present
+    backup: true
+  when:
+    - ssh_config_stat.stat.exists
+    - samba_ssh_deny_users | length > 0
+    - samba_server_role in ['active directory domain controller', 'member server']
+  notify: Restart SSH service
+  tags:
+    - samba
+    - samba-auth
+    - samba-pam

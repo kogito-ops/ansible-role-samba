@@ -1,0 +1,26 @@
+---
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    - name: Ensure hostname is set correctly
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}.{{ samba_primary_domain | default('samba.internal') }}"
+      when: inventory_hostname != ansible_hostname
+
+    - name: Update /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: >
+          127.0.1.1 {{ inventory_hostname }}.{{ samba_primary_domain | default('samba.internal') }}
+          {{ inventory_hostname }}
+        insertafter: "^127.0.0.1"
+
+    - name: Verify hostname
+      ansible.builtin.command: hostname -f
+      register: hostname_check
+      changed_when: false
+
+    - name: Show hostname
+      ansible.builtin.debug:
+        msg: "Hostname is: {{ hostname_check.stdout }}"

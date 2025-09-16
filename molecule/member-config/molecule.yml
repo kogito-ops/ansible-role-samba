@@ -1,0 +1,40 @@
+---
+dependency:
+  name: galaxy
+driver:
+  name: molecule-qemu
+scenario:
+  name: member-config
+platforms:
+  - name: member-config-test
+    hostname: member-config-test.samba.internal
+    image_url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+    image_checksum: sha256:https://cloud-images.ubuntu.com/jammy/current/SHA256SUMS
+    image_arch: x86_64
+    network_ssh_port: 10023
+    ssh_user: ubuntu
+    memory: 2048
+    cpus: 2
+    disk_size: 20G
+    network_mode: user
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      member-config-test:
+        samba_server_role: member server
+        samba_join_domain: false # Don't actually join, just configure
+        samba_primary_domain: samba.internal
+        samba_domain_member:
+          domain: samba.internal
+          workgroup: SAMBA
+          realm: SAMBA.INTERNAL
+          domain_admin_user: Administrator
+          domain_admin_password: '${MOLECULE_DOMAIN_ADMIN_PASS:-TestDomainAdmin123!}'
+          domain_controller: dc-test.samba.internal
+          id_mapping:
+            backend: rid
+            range_min: 10000
+            range_max: 999999
+verifier:
+  name: ansible

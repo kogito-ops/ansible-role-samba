@@ -1,0 +1,57 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Verify Samba configuration contains member server settings
+      ansible.builtin.lineinfile:
+        path: /etc/samba/smb.conf
+        line: '   security = ADS'
+      check_mode: true
+      register: ads_security
+
+    - name: Verify realm is configured
+      ansible.builtin.lineinfile:
+        path: /etc/samba/smb.conf
+        line: '   realm = TEST.LOCAL'
+      check_mode: true
+      register: realm_config
+
+    - name: Verify winbind is configured
+      ansible.builtin.lineinfile:
+        path: /etc/samba/smb.conf
+        line: '   winbind use default domain = yes'
+      check_mode: true
+      register: winbind_config
+
+    - name: Verify Kerberos configuration
+      ansible.builtin.stat:
+        path: /etc/krb5.conf
+      register: krb5_config
+
+    - name: Check that required services are enabled
+      ansible.builtin.systemd:
+        name: '{{ item }}'
+      check_mode: true
+      register: service_status
+      loop:
+        - smbd
+        - nmbd
+        - winbind
+
+    - name: Verify samba-ad-dc is disabled
+      ansible.builtin.systemd:
+        name: samba-ad-dc
+      check_mode: true
+      register: dc_service_status
+
+    - name: Assert configurations are correct
+      ansible.builtin.assert:
+        that:
+          - not ads_security.changed
+          - not realm_config.changed
+          - not winbind_config.changed
+          - krb5_config.stat.exists
+          - dc_service_status.status.UnitFileState == "masked"
+        fail_msg: 'Member server configuration is not correct'
+        success_msg: 'Member server is properly configured'

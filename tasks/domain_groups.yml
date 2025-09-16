@@ -1,0 +1,53 @@
+---
+- name: Domain groups | Generate list of existing domain groups
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool group list
+  register: _samba_domain_groups
+  changed_when: false
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain-groups
+
+- name: Domain groups | Ensure domain groups exist
+  become: true
+  ansible.builtin.command: samba-tool group add {{ item['name'] }}
+  register: domain_groups_create
+  changed_when: '"Added group" in domain_groups_create.stdout'
+  loop: '{{ samba_domain_groups }}'
+  when:
+    - item['name'] not in _samba_domain_groups['stdout']
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain-groups
+
+- name: Domain groups | Generate lists of domain group members
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool group listmembers "{{ item['name'] }}"
+  register: _samba_domain_group_members
+  changed_when: false
+  loop: '{{ samba_domain_groups }}'
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain-groups
+
+- name: Domain groups | Ensure domain group members are added
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool group addmembers {{ item.0.item.name }} {{ item.1 }}
+  register: domain_groups_member_add
+  changed_when: '"Added members to group" in domain_groups_member_add.stdout'
+  loop: "{{ _samba_domain_group_members['results'] | subelements('item.members') }}"
+  when:
+    - item[1] != [] and item[1] not in item[0]['stdout']
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain-groups

@@ -1,0 +1,57 @@
+---
+role_name_check: 1
+
+dependency:
+  name: galaxy
+  options:
+    ignore-errors: true
+
+driver:
+  name: molecule-qemu
+
+platforms:
+  - name: dc01
+    hostname: dc01.samba.internal
+    image_url: 'https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img'
+    image_checksum: 'sha256:https://cloud-images.ubuntu.com/jammy/current/SHA256SUMS'
+    image_arch: x86_64
+    vm_memory: 2048
+    vm_cpus: 2
+    vm_disk: 20G
+    ssh_port: 11022
+    ssh_user: ubuntu
+    network_mode: user
+    network_extra_args: >-
+      hostfwd=tcp::11053-:53,hostfwd=udp::11053-:53,hostfwd=tcp::11088-:88,hostfwd=udp::11088-:88,
+      hostfwd=tcp::11389-:389,hostfwd=tcp::11445-:445,hostfwd=tcp::11464-:464,hostfwd=udp::11464-:464
+    groups:
+      - samba_domain_controllers
+
+provisioner:
+  name: ansible
+  # env:
+  #     ANSIBLE_VERBOSITY: 3
+  playbooks:
+    converge: ../default/converge.yml
+  inventory:
+    group_vars:
+      samba_domain_controllers:
+        samba_server_role: active directory domain controller
+        samba_create_domain_controller: true
+        samba_primary_domain: 'samba.internal'
+        samba_netbios_domain_name: "{{ samba_primary_domain.split('.') }}"
+        samba_workgroup: '{{ samba_netbios_domain_name[0] | upper }}'
+        samba_ad_info:
+          ad_dc_hostname: '{{ ansible_hostname }}'
+          ad_dc_fqdn: '{{ ansible_fqdn }}'
+          ad_dns_domain_name: '{{ samba_primary_domain }}'
+          adminpass: '${MOLECULE_SAMBA_ADMIN_PASS:-TestAdminPass123!}'
+          machinepass: '${MOLECULE_SAMBA_MACHINE_PASS:-TestMachinePass123!}'
+          allow_dns_updates: disabled
+          backend_dns: SAMBA_INTERNAL
+          dns_forwarder: '1.1.1.1 8.8.8.8'
+          kerberos_realm: '{{ samba_primary_domain }}'
+          netbios_domain_name: '{{ samba_netbios_domain_name[0] | upper }}'
+    host_vars:
+      dc01:
+        samba_server_role: active directory domain controller

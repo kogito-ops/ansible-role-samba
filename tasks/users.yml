@@ -1,0 +1,32 @@
+---
+- name: Local users | Create users with group memberships
+  become: true
+  ansible.builtin.user:
+    name: "{{ item[0]['name'] }}"
+    groups: '{{ item[1] }}'
+    append: true
+  loop: "{{ samba_local_users | list | subelements('groups') }}"
+  no_log: '{{ samba_local_users_no_log | bool }}'
+  tags:
+    - samba
+    - samba-users
+
+- name: Local users | Create Samba password for users
+  become: true
+  ansible.builtin.shell: |
+    set -o pipefail
+    printf '%s\n%s\n' {{ item['smbpasswd'] | quote }} {{ item['smbpasswd'] | quote }} | \
+      smbpasswd -s -a {{ item['name'] | quote }}
+  register: create_samba_password_for_local_user
+  changed_when: '"Added user" in create_samba_password_for_local_user.stdout'
+  failed_when:
+    - create_samba_password_for_local_user.rc != 0
+    - '"Failed to add entry for user" in create_samba_password_for_local_user.stderr'
+  loop: '{{ samba_local_users | list }}'
+  when:
+    - item['smbpasswd'] is defined
+    - item['smbpasswd'] is string
+  no_log: '{{ samba_local_users_no_log | bool }}'
+  tags:
+    - samba
+    - samba-users

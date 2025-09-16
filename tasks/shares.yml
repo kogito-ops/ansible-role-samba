@@ -1,0 +1,13 @@
+---
+- name: Shared directories | Ensure shared directories exist
+  become: true
+  ansible.builtin.file:
+    path: "{{ samba_shares_path + '/' + item['name'] }}"
+    owner: "{{ item['owner'] | default(omit) }}"
+    group: "{{ item['group'] }}"
+    mode: "{{ item['mode'] }}"
+    state: directory
+  loop: '{{ samba_shares }}'
+  tags:
+    - samba
+    - samba-shares

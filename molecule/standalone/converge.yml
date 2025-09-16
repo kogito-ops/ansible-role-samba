@@ -1,0 +1,62 @@
+---
+- name: Converge Standalone Server
+  hosts: all
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+      when: ansible_os_family == "Debian"
+      changed_when: false
+
+    - name: Include samba role for standalone server
+      ansible.builtin.include_role:
+        name: kogito-ops.samba
+
+    - name: Start Samba services manually (container workaround)
+      ansible.builtin.systemd:
+        name: '{{ item }}'
+        state: started
+      register: service_start
+      failed_when: false
+      loop:
+        - smbd
+        - nmbd
+
+    - name: Display service start results
+      ansible.builtin.debug:
+        msg: "Service {{ item.item }}: {{ 'Started' if not item.failed else 'Failed to start' }}"
+      loop: '{{ service_start.results }}'
+
+    - name: Test SMB service availability (if running)
+      ansible.builtin.command: smbclient -L localhost -N
+      register: smb_test
+      failed_when: false
+      changed_when: false
+
+    - name: Display SMB test results
+      ansible.builtin.debug:
+        msg: "SMB service test: {{ 'Available' if smb_test.rc == 0 else 'Not available' }}"
+
+    - name: Verify Samba configuration
+      ansible.builtin.command: testparm -s
+      register: testparm_output
+      failed_when: false
+      changed_when: false
+
+    - name: Display Samba configuration validation
+      ansible.builtin.debug:
+        msg: 'Samba configuration is valid'
+      when: testparm_output.rc == 0
+
+    - name: Test user authentication
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo 'TestPass123!' | smbclient -L localhost -U testuser
+      register: user_auth_test
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: Display authentication test result
+      ansible.builtin.debug:
+        msg: "User authentication test: {{ 'PASSED' if user_auth_test.rc == 0 else 'FAILED' }}"

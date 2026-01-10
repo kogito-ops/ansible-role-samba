@@ -189,6 +189,7 @@ SRV   _ldap._tcp.dc._msdcs.<domain>          0 100 389 dc-hostname.<domain>
 | `samba_join_domain` | `false` | Enable domain join for member servers |
 | `samba_primary_domain` | `samba.internal` | AD domain name |
 | `samba_workgroup` | `SAMBA` | Workgroup name (standalone mode) |
+| `samba_dns_forwarder` | `{{ samba_ad_info.dns_forwarder }}` | Per-DC DNS forwarder(s), space-separated |
 
 ### Domain member settings
 

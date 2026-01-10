@@ -41,8 +41,8 @@
 {% endif %}
 
 {% if samba_server_role == "active directory domain controller" %}
-# Change this to define where to forward DNS queries too
-   dns forwarder = {{ samba_ad_info.dns_forwarder }}
+# DNS forwarder(s) - can be configured per-DC via samba_dns_forwarder
+   dns forwarder = {{ samba_dns_forwarder }}
 
 # Change this to enable POSIX compatible mappings
    idmap_ldb:use rfc2307 = yes

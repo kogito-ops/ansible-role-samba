@@ -120,6 +120,12 @@ samba_ad_info:
   kerberos_realm: '{{ samba_primary_domain }}'
   netbios_domain_name: '{{ samba_netbios_domain_name[0] | upper }}'
 
+# Per-DC DNS forwarder configuration
+# This can be set per-host in inventory or host_vars to use different DNS forwarders
+# on different domain controllers. Falls back to samba_ad_info.dns_forwarder if not set.
+# Supports multiple forwarders separated by spaces: '1.1.1.1 8.8.8.8'
+samba_dns_forwarder: '{{ samba_ad_info.dns_forwarder }}'
+
 # Defines workgroup for standalone server
 samba_workgroup: '{{ samba_netbios_domain_name[0] | upper }}'
 

@@ -73,6 +73,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Proper restart sequence for systemd-resolved and samba-ad-dc when using SAMBA_INTERNAL DNS
 - **Handler for Samba Runtime Cleanup**
   - Cleans stale PID files, message queues, sockets, and lock files before service start
+- **Per-DC DNS Forwarder Configuration**
+  - New `samba_dns_forwarder` variable allows different DNS forwarders per domain controller
+  - Supports multiple forwarders separated by spaces
+  - Falls back to `samba_ad_info.dns_forwarder` if not set per-host
+  - Can be set in inventory or host_vars for individual DCs
 - **Ansible Collection Dependencies**
   - Added `requirements.yml` with ansible.posix and community.general collections
 - **Python Project Configuration**

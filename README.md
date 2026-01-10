@@ -89,7 +89,8 @@ ansible-galaxy collection install -r requirements.yml
 
 ### Basic usage
 
-#### Standalone file server
+<details>
+<summary><strong>Standalone file server</strong></summary>
 
 ```yaml
 - hosts: fileservers
@@ -108,7 +109,10 @@ ansible-galaxy collection install -r requirements.yml
         valid_users: alice
 ```
 
-#### Primary domain controller
+</details>
+
+<details>
+<summary><strong>Primary domain controller</strong></summary>
 
 ```yaml
 - hosts: dc1
@@ -123,7 +127,10 @@ ansible-galaxy collection install -r requirements.yml
       dns_forwarder: 8.8.8.8
 ```
 
-#### Secondary domain controller
+</details>
+
+<details>
+<summary><strong>Secondary domain controller</strong></summary>
 
 ```yaml
 - hosts: dc2
@@ -138,7 +145,10 @@ ansible-galaxy collection install -r requirements.yml
       dns_forwarder: 8.8.8.8
 ```
 
-#### Domain member server
+</details>
+
+<details>
+<summary><strong>Domain member server</strong></summary>
 
 ```yaml
 - hosts: member-servers
@@ -167,6 +177,8 @@ ansible-galaxy collection install -r requirements.yml
         writable: true
         valid_users: "@Domain Users"
 ```
+
+</details>
 
 ### DNS configuration for AD
 
@@ -200,11 +212,14 @@ SRV   _ldap._tcp.dc._msdcs.<domain>          0 100 389 dc-hostname.<domain>
 | `samba_domain_member.workgroup` | `{{ samba_workgroup }}` | NetBIOS workgroup |
 | `samba_domain_member.realm` | `{{ samba_primary_domain \| upper }}` | Kerberos realm |
 | `samba_domain_member.domain_admin_user` | `Administrator` | Domain admin username |
-| `samba_domain_member.domain_admin_password` | `ChangeMe123!` | Domain admin password (use Ansible Vault!) |
+| `samba_domain_member.domain_admin_password` | `ChangeMe123!` | Domain admin password |
 | `samba_domain_member.domain_controller` | `{{ samba_primary_domain_controller }}` | Domain controller hostname |
 | `samba_domain_member.id_mapping.backend` | `rid` | ID mapping backend: `rid`, `autorid`, `ad`, `tdb` |
 | `samba_domain_member.id_mapping.range_min` | `10000` | Minimum UID/GID for domain users |
 | `samba_domain_member.id_mapping.range_max` | `999999` | Maximum UID/GID for domain users |
+
+> [!IMPORTANT]
+> Use Ansible Vault for `samba_domain_member.domain_admin_password` in production.
 
 ### File paths
 
@@ -232,7 +247,7 @@ SRV   _ldap._tcp.dc._msdcs.<domain>          0 100 389 dc-hostname.<domain>
 
 #### RFC2307 schema extensions
 
-Unix attributes for domain accounts are enabled by default. To customize:
+Unix attributes for domain accounts are enabled by default:
 
 ```yaml
 samba_enable_rfc2307: true  # Default: true
@@ -261,7 +276,8 @@ samba_sudo_create_default_container: true
 samba_sudo_container_name: sudoers
 ```
 
-#### Password policies
+<details>
+<summary><strong>Password policies</strong></summary>
 
 ```yaml
 samba_password_policy:
@@ -272,7 +288,10 @@ samba_password_policy:
   min_length: 14
 ```
 
-#### Account lockout policies
+</details>
+
+<details>
+<summary><strong>Account lockout policies</strong></summary>
 
 ```yaml
 samba_account_policy:
@@ -281,7 +300,10 @@ samba_account_policy:
   reset_lockout_after: 30
 ```
 
-#### Service accounts
+</details>
+
+<details>
+<summary><strong>Service accounts</strong></summary>
 
 ```yaml
 samba_create_domain_service_accounts: true
@@ -300,7 +322,10 @@ samba_domain_service_accounts:
     keytab_mode: '0600'
 ```
 
-#### Organizational Units
+</details>
+
+<details>
+<summary><strong>Organizational Units</strong></summary>
 
 ```yaml
 samba_create_domain_organizational_units: true
@@ -310,7 +335,10 @@ samba_domain_organizational_units:
 samba_default_computer_ou: 'OU=Workstations,DC=corp,DC=example,DC=com'
 ```
 
-#### Group Policy Objects
+</details>
+
+<details>
+<summary><strong>Group Policy Objects</strong></summary>
 
 ```yaml
 samba_create_domain_group_policies: true
@@ -328,7 +356,10 @@ samba_domain_group_policies:
         mode: '0644'
 ```
 
-#### Domain users with RFC2307 attributes
+</details>
+
+<details>
+<summary><strong>Domain users with RFC2307 attributes</strong></summary>
 
 When `samba_enable_rfc2307: true`, users automatically receive Unix attributes:
 
@@ -352,7 +383,10 @@ samba_domain_users:
     # login_shell: /bin/bash
 ```
 
-#### Domain groups with RFC2307 attributes
+</details>
+
+<details>
+<summary><strong>Domain groups with RFC2307 attributes</strong></summary>
 
 ```yaml
 samba_create_domain_groups: true
@@ -364,6 +398,8 @@ samba_domain_groups:
     # Optional: specific GID (auto-assigned if omitted)
     # gid: 10500
 ```
+
+</details>
 
 #### AD Recycle Bin
 
@@ -384,7 +420,8 @@ samba_admin_share_valid_users: '@"Domain Admins", @"Enterprise Admins"'
 samba_admin_share_admin_users: '@"Domain Admins"'
 ```
 
-**Security note:** Administrative shares provide root filesystem access. Only enable when needed for Windows management tools. SMB encryption is required for connections to administrative shares.
+> [!WARNING]
+> Administrative shares provide root filesystem access. Only enable when needed for Windows management tools. SMB encryption is required for connections to administrative shares.
 
 ### Share configuration
 
@@ -407,7 +444,8 @@ samba_shares:
 
 ### Advanced features
 
-#### TLS encryption
+<details>
+<summary><strong>TLS encryption</strong></summary>
 
 ```yaml
 samba_enable_transport_encryption: true
@@ -417,12 +455,17 @@ samba_tls_certfile: /etc/samba/tls/cert.pem
 samba_tls_cafile: /etc/samba/tls/ca.pem
 ```
 
-#### Clustering with CTDB
+</details>
+
+<details>
+<summary><strong>Clustering with CTDB</strong></summary>
 
 ```yaml
 samba_create_cluster: true
 # Note: CTDB recovery lock must be configured manually
 ```
+
+</details>
 
 ## Testing
 
@@ -468,20 +511,19 @@ molecule converge -s member-server
 
 ### Not yet implemented
 
-- SYSVOL replication between domain controllers
-- Domain functional level management
-- Domain backup and restore automation
-- LAPS (Local Administrator Password Solution) schema
-- Fine-grained password policies (PSOs)
-- Reverse DNS zone creation
-- Sites and Services management
-- Comprehensive health monitoring
+- [ ] SYSVOL replication between domain controllers
+- [ ] Domain functional level management
+- [ ] Domain backup and restore automation
+- [ ] LAPS (Local Administrator Password Solution) schema
+- [ ] Fine-grained password policies (PSOs)
+- [ ] Reverse DNS zone creation
+- [ ] Sites and Services management
+- [ ] Comprehensive health monitoring
 
 ### Partial implementations
 
 - BIND9 DLZ backend is validated but not fully implemented
 - SPN management limited to service account creation (no list/delete)
-- DNS forwarder is global (per-DC configuration not supported)
 
 ### External requirements
 
@@ -491,7 +533,9 @@ molecule converge -s member-server
 
 ## Security considerations
 
-- **Always use Ansible Vault** for domain admin passwords in production
+> [!IMPORTANT]
+> Always use Ansible Vault for domain admin passwords in production.
+
 - All password-handling tasks use `no_log: true` to prevent credential exposure
 - Kerberos configuration uses modern encryption types (AES256, AES128)
 - LDAP signing enforcement enabled by default

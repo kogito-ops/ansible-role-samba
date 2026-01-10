@@ -73,8 +73,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Proper restart sequence for systemd-resolved and samba-ad-dc when using SAMBA_INTERNAL DNS
 - **Handler for Samba Runtime Cleanup**
   - Cleans stale PID files, message queues, sockets, and lock files before service start
+- **Ansible Collection Dependencies**
+  - Added `requirements.yml` with ansible.posix and community.general collections
+- **Python Project Configuration**
+  - Added `pyproject.toml` and `uv.lock` for development dependency management
 
 ### Changed
+- **Linux Integration Enabled by Default**: Schema extensions are now enabled by default for full Linux integration out of the box:
+  - `samba_enable_rfc2307: true` - Unix attributes (UID, GID, shell, home)
+  - `samba_enable_ssh_schema: true` - Centralized SSH key storage
+  - `samba_enable_sudo_schema: true` - Centralized sudo rules
 - **Task Execution Order**: Local resources (groups, users, profiles, shares) now created before AD DC service starts
 - **smb.conf Template Improvements**
   - SYSVOL and NETLOGON shares now have proper AD DC configuration (case sensitive = no, smb encrypt = desired, vfs objects)
@@ -99,6 +107,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Group Creation Error Handling**: Added "already in use" to accepted error messages
 - **Service Account Group Membership**: Added `--object-types=user` flag to prevent ambiguous object errors
 - **Unix Admins Group Membership**: More robust parsing of ldbsearch output using `select('match')` filter
+- **Service Conflicts**: Properly stop and mask conflicting services (smbd, nmbd, winbind) before enabling samba-ad-dc
+- **Shell Scripts**: Added bash executable to machine account scripts in smb.conf
+- **Group Membership**: Fixed subelements filter for groups without members using `default([])` fallback
+- **DNS Zone List**: Added `-P` flag for machine credentials authentication in samba-tool commands
 
 ### Security
 - Passwords and sensitive data protected with no_log directives

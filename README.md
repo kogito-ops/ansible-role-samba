@@ -22,12 +22,23 @@ Active Directory domain controllers (primary/secondary), and domain member serve
 ansible-galaxy install kogito-ops.samba
 ```
 
+Install required Ansible collections:
+
+```shell
+ansible-galaxy collection install -r requirements.yml
+```
+
 ## Requirements
 
 - Ansible 2.13.9 or higher
 - Debian 12 or Ubuntu 22.04/24.04 LTS
 - amd64 or arm64 architecture
 - systemd
+
+### Ansible collections
+
+- `ansible.posix`
+- `community.general`
 
 ## Supported features
 
@@ -219,10 +230,10 @@ SRV   _ldap._tcp.dc._msdcs.<domain>          0 100 389 dc-hostname.<domain>
 
 #### RFC2307 schema extensions
 
-Enable Unix attributes for domain accounts:
+Unix attributes for domain accounts are enabled by default. To customize:
 
 ```yaml
-samba_enable_rfc2307: true
+samba_enable_rfc2307: true  # Default: true
 samba_rfc2307_id_start: 10000                    # Base ID for default AD groups
 samba_rfc2307_domain_user_uid_start: 10100       # Starting UID for domain users
 samba_rfc2307_domain_group_gid_start: 10500      # Starting GID for domain groups
@@ -232,18 +243,18 @@ samba_rfc2307_create_unix_admins: true           # Create Unix Admins group
 
 #### SSH key schema
 
-Store SSH public keys in AD user objects:
+SSH public key storage in AD is enabled by default:
 
 ```yaml
-samba_enable_ssh_schema: true
+samba_enable_ssh_schema: true  # Default: true
 ```
 
 #### Sudo schema
 
-Store sudo rules in AD:
+Sudo schema for centralized rules is enabled by default:
 
 ```yaml
-samba_enable_sudo_schema: true
+samba_enable_sudo_schema: true  # Default: true
 samba_sudo_create_default_container: true
 samba_sudo_container_name: sudoers
 ```

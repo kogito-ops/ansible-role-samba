@@ -57,10 +57,11 @@
     - samba-service
     - samba-standalone
   block:
-    - name: Ensure Samba AD Domain Controller service is disabled and masked
+    - name: Ensure Samba AD Domain Controller service is stopped, disabled and masked
       become: true
       ansible.builtin.systemd_service:
         service: samba-ad-dc
+        state: stopped
         masked: true
         enabled: false
 
@@ -93,24 +94,27 @@
     - samba-service
     - samba-ad
   block:
-    - name: Ensure Samba standalone is disabled and masked
+    - name: Ensure Samba standalone is stopped, disabled and masked
       become: true
       ansible.builtin.systemd_service:
         service: smbd
+        state: stopped
         masked: true
         enabled: false
 
-    - name: Ensure Samba NetBIOS name service is disabled and masked
+    - name: Ensure Samba NetBIOS name service is stopped, disabled and masked
       become: true
       ansible.builtin.systemd_service:
         service: nmbd
+        state: stopped
         masked: true
         enabled: false
 
-    - name: Ensure Samba winbind service is disabled and masked
+    - name: Ensure Samba winbind service is stopped, disabled and masked
       become: true
       ansible.builtin.systemd_service:
         service: winbind
+        state: stopped
         masked: true
         enabled: false
 
@@ -120,7 +124,6 @@
         service: samba-ad-dc
         masked: false
         enabled: true
-        state: stopped
       when:
         - samba_create_domain_controller|bool
 
@@ -132,10 +135,11 @@
     - samba-service
     - samba-member
   block:
-    - name: Ensure Samba AD Domain Controller service is disabled and masked
+    - name: Ensure Samba AD Domain Controller service is stopped, disabled and masked
       become: true
       ansible.builtin.systemd_service:
         service: samba-ad-dc
+        state: stopped
         masked: true
         enabled: false
 

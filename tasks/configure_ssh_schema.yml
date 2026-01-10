@@ -1,0 +1,156 @@
+---
+# Configure SSH Key Schema Extensions for Samba AD DC
+# This enables storing SSH public keys in Active Directory user objects
+# Prerequisites: Domain must be provisioned and operational
+#
+# NOTE: Schema modifications require stopping Samba because the schema
+# module blocks changes while the service is running.
+
+- name: SSH Schema | Check if SSH schema is already applied
+  ansible.builtin.stat:
+    path: /var/lib/samba/.ssh_schema_applied
+  register: _ssh_schema_marker
+
+- name: SSH Schema | Check if ldapPublicKey class exists in schema
+  become: true
+  # yamllint disable rule:line-length
+  ansible.builtin.shell: |
+    set -o pipefail
+    ldbsearch -H /var/lib/samba/private/sam.ldb \
+      -b "CN=Schema,CN=Configuration,{{ samba_ad_info.ad_dns_domain_name | upper | regex_replace('\.', ',DC=') | regex_replace('^', 'DC=') }}" \
+      "(cn=ldapPublicKey)" cn 2>/dev/null | grep -c "^cn: ldapPublicKey" || true
+  # yamllint enable rule:line-length
+  args:
+    executable: /bin/bash
+  register: _ssh_schema_exists
+  changed_when: false
+
+- name: SSH Schema | Display current schema status
+  ansible.builtin.debug:
+    msg: "SSH schema status: {{ 'Already applied' if (_ssh_schema_marker.stat.exists or _ssh_schema_exists.stdout | int > 0) else 'Not yet applied' }}"  # yamllint disable-line rule:line-length
+
+- name: SSH Schema | Apply SSH key schema extensions
+  when:
+    - not _ssh_schema_marker.stat.exists
+    - _ssh_schema_exists.stdout | int == 0
+  block:
+    - name: SSH Schema | Generate SSH schema LDIF
+      become: true
+      ansible.builtin.template:
+        src: ldif/ssh_schema.ldif.j2
+        dest: /tmp/ssh_schema.ldif
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: SSH Schema | Stop Samba AD DC service for schema modification
+      become: true
+      ansible.builtin.service:
+        name: samba-ad-dc
+        state: stopped
+      register: _samba_stopped_for_schema
+
+    - name: SSH Schema | Apply SSH schema to AD
+      become: true
+      # yamllint disable rule:line-length
+      ansible.builtin.command:
+        cmd: ldbmodify -H /var/lib/samba/private/sam.ldb /tmp/ssh_schema.ldif
+      # yamllint enable rule:line-length
+      register: _ssh_schema_apply
+      changed_when: _ssh_schema_apply.rc == 0
+
+    - name: SSH Schema | Start Samba AD DC service after schema modification
+      become: true
+      ansible.builtin.service:
+        name: samba-ad-dc
+        state: started
+      when: _samba_stopped_for_schema is changed
+
+    - name: SSH Schema | Wait for Samba to be ready
+      become: true
+      ansible.builtin.command:
+        cmd: samba-tool testparm --suppress-prompt
+      register: _samba_ready
+      until: _samba_ready.rc == 0
+      retries: 10
+      delay: 3
+      changed_when: false
+      when: _samba_stopped_for_schema is changed
+
+    - name: SSH Schema | Verify schema was applied
+      become: true
+      # yamllint disable rule:line-length
+      ansible.builtin.shell: |
+        set -o pipefail
+        ldbsearch -H /var/lib/samba/private/sam.ldb \
+          -b "CN=Schema,CN=Configuration,{{ samba_ad_info.ad_dns_domain_name | upper | regex_replace('\.', ',DC=') | regex_replace('^', 'DC=') }}" \
+          "(cn=ldapPublicKey)" cn 2>/dev/null | grep -q "^cn: ldapPublicKey"
+      # yamllint enable rule:line-length
+      args:
+        executable: /bin/bash
+      register: _ssh_schema_verify_applied
+      failed_when: _ssh_schema_verify_applied.rc != 0
+
+    - name: SSH Schema | Create marker file
+      become: true
+      ansible.builtin.file:
+        path: /var/lib/samba/.ssh_schema_applied
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: SSH Schema | Clean up temporary LDIF
+      ansible.builtin.file:
+        path: /tmp/ssh_schema.ldif
+        state: absent
+
+  rescue:
+    - name: SSH Schema | Ensure Samba is started after failure
+      become: true
+      ansible.builtin.service:
+        name: samba-ad-dc
+        state: started
+      when: _samba_stopped_for_schema is defined and _samba_stopped_for_schema is changed
+
+    - name: SSH Schema | Clean up temporary LDIF on failure
+      ansible.builtin.file:
+        path: /tmp/ssh_schema.ldif
+        state: absent
+
+    - name: SSH Schema | Fail with error message
+      ansible.builtin.fail:
+        msg: "Failed to apply SSH schema. Check /tmp/ssh_schema_apply.log for details."
+
+- name: SSH Schema | Verify SSH schema is functional
+  become: true
+  # yamllint disable rule:line-length
+  ansible.builtin.shell: |
+    set -o pipefail
+    # Check that sshPublicKey attribute exists
+    if ! ldbsearch -H /var/lib/samba/private/sam.ldb \
+         -b "CN=Schema,CN=Configuration,{{ samba_ad_info.ad_dns_domain_name | upper | regex_replace('\.', ',DC=') | regex_replace('^', 'DC=') }}" \
+         "(cn=sshPublicKey)" cn 2>/dev/null | grep -q "^cn: sshPublicKey"; then
+      echo "ERROR: sshPublicKey attribute not found in schema" >&2
+      exit 1
+    fi
+
+    # Check that ldapPublicKey class exists
+    if ! ldbsearch -H /var/lib/samba/private/sam.ldb \
+         -b "CN=Schema,CN=Configuration,{{ samba_ad_info.ad_dns_domain_name | upper | regex_replace('\.', ',DC=') | regex_replace('^', 'DC=') }}" \
+         "(cn=ldapPublicKey)" cn 2>/dev/null | grep -q "^cn: ldapPublicKey"; then
+      echo "ERROR: ldapPublicKey class not found in schema" >&2
+      exit 1
+    fi
+
+    echo "SSH schema verification successful"
+  # yamllint enable rule:line-length
+  args:
+    executable: /bin/bash
+  register: _ssh_schema_verify
+  changed_when: false
+  failed_when: _ssh_schema_verify.rc != 0
+
+- name: SSH Schema | Display verification results
+  ansible.builtin.debug:
+    msg: "{{ _ssh_schema_verify.stdout }}"

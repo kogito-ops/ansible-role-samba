@@ -6,21 +6,125 @@
   changed_when: false
   register: domain_users
   tags:
-    - samba
-    - samba-ad
-    - samba-domain-users
+    - samba_domain_users
+    - samba_domain_account_management
 
 - name: Domain users | Ensure domain users exist
   become: true
   ansible.builtin.command:
-    cmd: samba-tool user add {{ item['name'] }} '{{ item['password'] }}'
+    cmd: >
+      samba-tool user add {{ item['name'] }} '{{ item['password'] }}'
+      {% if item['use_username_as_cn'] | default(false) %}--use-username-as-cn{% endif %}
+      {% if item['description'] is defined %}--description="{{ item['description'] }}"{% endif %}
+      {% if item['surname'] is defined %}--surname="{{ item['surname'] }}"{% endif %}
+      {% if item['given_name'] is defined %}--given-name="{{ item['given_name'] }}"{% endif %}
+      {% if item['mail_address'] is defined %}--mail-address="{{ item['mail_address'] }}"{% endif %}
+      {% if item['account_disabled'] | default(false) %}--disabled{% endif %}
   register: domain_users_create
-  changed_when: '" added successfully" in domain_users_create.stdout'
+  changed_when: '"User .* added successfully" in domain_users_create.stdout'
+  failed_when:
+    - domain_users_create.rc != 0
+    - '"already exists" not in domain_users_create.stderr'
   loop: '{{ samba_domain_users }}'
   when:
     - item['name'] not in domain_users['stdout']
   no_log: '{{ samba_domain_users_no_log | bool }}'
   tags:
-    - samba
-    - samba-ad
-    - samba-domain-users
+    - samba_domain_users
+    - samba_domain_account_management
+
+- name: Domain users | Set facts for RFC2307 integration
+  ansible.builtin.set_fact:
+    _samba_ldap_suffix: ",DC={{ samba_ad_info.ad_dns_domain_name | regex_replace('\\.', ',DC=') }}"
+    _samba_domain_user_uid_start: "{{ samba_rfc2307_domain_user_uid_start | default(samba_rfc2307_id_start | int + 100) }}"
+  when:
+    - samba_enable_rfc2307 | default(false) | bool
+  tags:
+    - samba_domain_users
+    - samba_domain_account_management
+
+- name: Domain users | Check if domain users have Unix attributes
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      ldbsearch -H /var/lib/samba/private/sam.ldb
+      "(&(objectClass=user)(cn={{ item['name'] }}))"
+      uidNumber gidNumber
+  register: _samba_domain_user_unix_attrs
+  changed_when: false
+  loop: '{{ samba_domain_users }}'
+  when:
+    - samba_enable_rfc2307 | default(false) | bool
+    - samba_domain_users | length > 0
+  no_log: '{{ samba_domain_users_no_log | bool }}'
+  tags:
+    - samba_domain_users
+    - samba_domain_account_management
+
+- name: Domain users | Add Unix attributes (RFC2307) to domain users
+  become: true
+  ansible.builtin.shell:
+    cmd: >
+      ldbmodify -H /var/lib/samba/private/sam.ldb
+      -U Administrator%{{ samba_ad_info.adminpass }}
+    stdin: |
+      dn: CN={{ item.item['name'] }},CN=Users{{ _samba_ldap_suffix }}
+      changetype: modify
+      add: uidNumber
+      uidNumber: {{ item.item['uid'] | default(_samba_domain_user_uid_start | int + index) }}
+      -
+      add: gidNumber
+      gidNumber: {{ item.item['gid'] | default(samba_rfc2307_id_start | int) }}
+      -
+      add: unixHomeDirectory
+      unixHomeDirectory: {{ item.item['unix_home'] | default('/home/' + item.item['name']) }}
+      -
+      add: loginShell
+      loginShell: {{ item.item['login_shell'] | default('/bin/bash') }}
+      -
+      add: msSFU30NisDomain
+      msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+      -
+      add: msSFU30Name
+      msSFU30Name: {{ item.item['name'] }}
+  no_log: '{{ samba_domain_users_no_log | bool }}'
+  register: _samba_domain_user_rfc2307
+  changed_when: _samba_domain_user_rfc2307.rc == 0
+  failed_when:
+    - _samba_domain_user_rfc2307.rc != 0
+    - '"Attribute or value exists" not in _samba_domain_user_rfc2307.stderr'
+  loop: "{{ _samba_domain_user_unix_attrs.results | default([]) }}"
+  loop_control:
+    index_var: index
+  when:
+    - samba_enable_rfc2307 | default(false) | bool
+    - _samba_domain_user_unix_attrs is defined
+    - item.stdout is defined
+    - '"# 0 entries" not in item.stdout'
+    - '"uidNumber:" not in item.stdout'
+  tags:
+    - samba_domain_users
+    - samba_domain_account_management
+
+- name: Domain users | Add users to their assigned groups
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool group addmembers "{{ item.1 }}" {{ item.0.name }}
+  register: _samba_user_group_add
+  changed_when: '"Added members" in _samba_user_group_add.stdout'
+  failed_when:
+    - _samba_user_group_add.rc != 0
+    - '"already exists for target" not in _samba_user_group_add.stderr'
+    - '"is already a member of the group" not in _samba_user_group_add.stderr'
+    - '"already set via primaryGroupID" not in _samba_user_group_add.stderr'
+    - '"Unable to find group" not in _samba_user_group_add.stderr'
+    - '"No such object" not in _samba_user_group_add.stderr'
+    - '"Found multiple results" not in _samba_user_group_add.stderr'
+  loop: "{{ samba_domain_users | subelements('groups', skip_missing=True) }}"
+  when:
+    - samba_domain_users is defined
+    - samba_domain_users | length > 0
+  no_log: '{{ samba_domain_users_no_log | bool }}'
+  tags:
+    - samba_domain_users
+    - samba_domain_account_management

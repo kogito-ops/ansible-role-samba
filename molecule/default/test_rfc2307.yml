@@ -1,0 +1,40 @@
+---
+- name: Test RFC2307 on existing domain
+  hosts: dc01
+  become: true
+  vars:
+    samba_enable_rfc2307: true
+    samba_rfc2307_id_start: 10000
+    samba_rfc2307_create_unix_admins: true
+    samba_rfc2307_unix_admins_group: 'Unix Admins'
+    samba_ad_info:
+      ad_dc_hostname: '{{ ansible_hostname }}'
+      ad_dc_fqdn: '{{ ansible_fqdn }}'
+      ad_dns_domain_name: 'samba.internal'
+      adminpass: 'TestAdminPass123!'
+      machinepass: 'TestMachinePass123!'
+      allow_dns_updates: disabled
+      backend_dns: SAMBA_INTERNAL
+      dns_forwarder: '1.1.1.1 8.8.8.8'
+      kerberos_realm: 'samba.internal'
+      netbios_domain_name: 'SAMBA'
+  tasks:
+    - name: Check if domain exists
+      ansible.builtin.stat:
+        path: /var/lib/samba/.domain_exists
+      register: _samba_domain_check
+
+    - name: Set domain existence fact
+      ansible.builtin.set_fact:
+        _samba_domain_exists: '{{ _samba_domain_check.stat.exists }}'
+
+    - name: Show domain status
+      ansible.builtin.debug:
+        msg: 'Domain exists: {{ _samba_domain_exists }}'
+
+    - name: Apply RFC2307 configuration
+      ansible.builtin.include_role:
+        name: kogito-ops.samba
+        tasks_from: configure_rfc2307.yml
+      when:
+        - _samba_domain_exists | bool

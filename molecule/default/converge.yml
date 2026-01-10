@@ -4,15 +4,37 @@
   become: true
 
   vars:
-      ansible_python_interpreter: auto_silent
+    ansible_python_interpreter: auto_silent
+    # Disable runtime cleanup to allow idempotence testing
+    samba_cleanup_runtime_files: false
+    # Disable Recycle Bin to focus on core testing
+    samba_enable_recycle_bin: false
+    # Disable all optional features to test core idempotency
+    samba_enable_rfc2307: false
+    samba_enable_ssh_schema: false
+    samba_enable_sudo_schema: false
+    samba_create_domain_groups: false
+    samba_create_domain_users: false
+    samba_create_domain_service_accounts: false
+    samba_create_domain_organizational_units: false
+    samba_create_domain_group_policies: false
 
   pre_tasks:
-      - name: Update apt cache
-        ansible.builtin.apt:
-            update_cache: true
-            cache_valid_time: 600
-        changed_when: false
-        when: ansible_facts['os_family'] == 'Debian'
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 600
+      changed_when: false
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Check if this is a second converge run
+      ansible.builtin.stat:
+        path: /var/lib/samba/.samba_ad_created
+      register: domain_check
+
+    - name: Show domain status
+      ansible.builtin.debug:
+        msg: "Domain exists: {{ domain_check.stat.exists | default(false) }}"
 
   roles:
-      - role: kogito-ops.samba
+    - role: kogito-ops.samba

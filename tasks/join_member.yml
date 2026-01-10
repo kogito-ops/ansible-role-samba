@@ -60,7 +60,8 @@
       set -o pipefail
       echo '{{ samba_domain_member.domain_admin_password }}' | net ads join {{ samba_domain_member.domain }} \
         -U {{ samba_domain_member.domain_admin_user }}@{{ samba_domain_member.realm | upper }}
-  no_log: true
+    executable: /bin/bash
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
   register: _samba_member_joined
   failed_when:
     - _samba_member_joined.rc != 0

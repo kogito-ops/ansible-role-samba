@@ -1,0 +1,92 @@
+---
+- name: Domain OUs | Generate list of existing organizational units
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool ou list
+  register: _samba_domain_ous_raw
+  changed_when: false
+  failed_when: false
+  tags:
+    - samba_domain_organizational_units
+    - samba_domain_account_management
+
+- name: Domain OUs | Parse existing organizational units
+  ansible.builtin.set_fact:
+    _samba_domain_ous_list: "{{ _samba_domain_ous_raw.stdout_lines | default([]) }}"
+  tags:
+    - samba_domain_organizational_units
+    - samba_domain_account_management
+
+- name: Domain OUs | Ensure organizational units exist
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool ou add "{{ item }}"
+  register: domain_ous_create
+  changed_when: '"Created ou" in domain_ous_create.stdout'
+  failed_when:
+    - domain_ous_create.rc != 0
+    - '"already exists" not in domain_ous_create.stderr'
+  loop: '{{ samba_domain_organizational_units }}'
+  when:
+    - samba_domain_organizational_units | length > 0
+    - (item | regex_replace(',DC=.*$', '')) not in _samba_domain_ous_list
+  no_log: '{{ samba_domain_organizational_units_no_log | default(false) | bool }}'
+  tags:
+    - samba_domain_organizational_units
+    - samba_domain_account_management
+
+- name: Domain OUs | Check current default computer container
+  become: true
+  ansible.builtin.shell: |
+    python3 -c "
+    import subprocess
+    import re
+    result = subprocess.run([
+        'ldbsearch', '-H', '/var/lib/samba/private/sam.ldb',
+        '-b', 'DC={{ samba_ad_info.ad_dns_domain_name.split('.') | join(',DC=') }}',
+        '(objectClass=domain)', 'wellKnownObjects'
+    ], capture_output=True, text=True)
+    match = re.search(r'B:32:AA312825768811D1ADED00C04FD8D5CD:([^\n]+(?:\n [^\n]+)*)', result.stdout)
+    if match:
+        value = match.group(1).replace('\n ', '')
+        print(value)
+    else:
+        print('CN=Computers,DC={{ samba_ad_info.ad_dns_domain_name.split('.') | join(',DC=') }}')
+    "
+  register: _current_computer_container
+  changed_when: false
+  failed_when: false
+  when:
+    - samba_default_computer_ou is defined
+    - samba_default_computer_ou | length > 0
+  tags:
+    - samba_domain_organizational_units
+    - samba_domain_account_management
+    - samba_default_computer_ou
+
+- name: Domain OUs | Set default computer OU via wellKnownObjects
+  become: true
+  ansible.builtin.shell: |
+    ldbmodify -H /var/lib/samba/private/sam.ldb <<'EOF'
+    dn: DC={{ samba_ad_info.ad_dns_domain_name.split('.') | join(',DC=') }}
+    changetype: modify
+    delete: wellKnownObjects
+    wellKnownObjects: B:32:AA312825768811D1ADED00C04FD8D5CD:{{ _current_computer_container.stdout | trim }}
+    -
+    add: wellKnownObjects
+    wellKnownObjects: B:32:AA312825768811D1ADED00C04FD8D5CD:{{ samba_default_computer_ou }}
+    EOF
+  register: _set_computer_ou
+  changed_when: _set_computer_ou.rc == 0
+  failed_when:
+    - _set_computer_ou.rc != 0
+    - '"Type or value exists" not in _set_computer_ou.stderr'
+  when:
+    - samba_default_computer_ou is defined
+    - samba_default_computer_ou | length > 0
+    - _current_computer_container.stdout is defined
+    - _current_computer_container.stdout | trim != samba_default_computer_ou
+  tags:
+    - samba_domain_organizational_units
+    - samba_domain_account_management
+    - samba_default_computer_ou

@@ -21,9 +21,7 @@ platforms:
     ssh_port: 11022
     ssh_user: ubuntu
     network_mode: user
-    network_extra_args: >-
-      hostfwd=tcp::11053-:53,hostfwd=udp::11053-:53,hostfwd=tcp::11088-:88,hostfwd=udp::11088-:88,
-      hostfwd=tcp::11389-:389,hostfwd=tcp::11445-:445,hostfwd=tcp::11464-:464,hostfwd=udp::11464-:464
+    network_extra_args: 'hostfwd=tcp::11053-:53,hostfwd=udp::11053-:53,hostfwd=tcp::11088-:88,hostfwd=udp::11088-:88,hostfwd=tcp::11389-:389,hostfwd=tcp::11445-:445,hostfwd=tcp::11464-:464,hostfwd=udp::11464-:464'
     groups:
       - samba_domain_controllers
 
@@ -41,6 +39,79 @@ provisioner:
         samba_primary_domain: 'samba.internal'
         samba_netbios_domain_name: "{{ samba_primary_domain.split('.') }}"
         samba_workgroup: '{{ samba_netbios_domain_name[0] | upper }}'
+        # Enable RFC2307 schema extensions for testing
+        samba_enable_rfc2307: true
+        samba_rfc2307_id_start: 10000
+        samba_rfc2307_create_unix_admins: true
+        # RFC2307 UID/GID ranges for domain accounts
+        samba_rfc2307_domain_user_uid_start: 10100
+        samba_rfc2307_domain_group_gid_start: 10500
+        samba_rfc2307_service_account_uid_start: 11000
+        # Enable SSH Key schema extensions for testing
+        samba_enable_ssh_schema: true
+        samba_ssh_schema_allow_public_keys: true
+        # Enable Sudo schema extensions for testing
+        samba_enable_sudo_schema: true
+        samba_sudo_create_default_container: true
+        samba_sudo_container_name: 'sudoers'
+        # Domain account management
+        samba_create_domain_groups: true
+        samba_create_domain_users: true
+        samba_create_domain_service_accounts: true
+        # Test domain groups with RFC2307 attributes
+        samba_domain_groups:
+          - name: Engineering
+            description: Engineering Team
+            # gid will be auto-assigned from samba_rfc2307_domain_group_gid_start
+          - name: Operations
+            description: Operations Team
+            gid: 10510  # Explicit GID assignment
+        # Test domain users with RFC2307 attributes and group membership
+        samba_domain_users:
+          - name: testuser1
+            password: 'TestUser1Pass123!'
+            given_name: Test
+            surname: User One
+            mail_address: testuser1@samba.internal
+            groups:
+              - Engineering
+            # uid will be auto-assigned from samba_rfc2307_domain_user_uid_start
+          - name: testuser2
+            password: 'TestUser2Pass123!'
+            given_name: Test
+            surname: User Two
+            mail_address: testuser2@samba.internal
+            groups:
+              - Engineering
+              - Operations
+            uid: 10150  # Explicit UID assignment
+            gid: 10500  # Primary group GID
+        # Test service accounts with RFC2307 attributes
+        samba_domain_service_accounts:
+          - name: svc_webapp
+            password: 'SvcWebApp123!'
+            description: Web Application Service Account
+            password_never_expires: true
+            spn: HTTP/webapp.samba.internal
+            # uid will be auto-assigned from samba_rfc2307_service_account_uid_start
+          - name: svc_backup
+            password: 'SvcBackup123!'
+            description: Backup Service Account
+            password_never_expires: true
+        # Organizational Units management
+        samba_create_domain_organizational_units: true
+        samba_domain_organizational_units:
+          - 'OU=Servers,DC=samba,DC=internal'
+          - 'OU=Workstations,DC=samba,DC=internal'
+          - 'OU=Service Accounts,DC=samba,DC=internal'
+        samba_default_computer_ou: 'OU=Workstations,DC=samba,DC=internal'
+        # Group Policy Objects management
+        samba_create_domain_group_policies: true
+        samba_domain_group_policies:
+          - name: Test Security Policy
+            link_to:
+              - 'DC=samba,DC=internal'
+            link_option: enforced
         samba_ad_info:
           ad_dc_hostname: '{{ ansible_hostname }}'
           ad_dc_fqdn: '{{ ansible_fqdn }}'

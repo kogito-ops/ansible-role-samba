@@ -1,0 +1,330 @@
+---
+# tasks/configure_rfc2307.yml
+# Configure RFC2307 schema extensions for Unix/Linux attribute support
+
+- name: RFC2307 | Set facts for LDAP suffix and ID ranges
+  ansible.builtin.set_fact:
+    _samba_ldap_suffix: ",DC={{ samba_ad_info.ad_dns_domain_name | regex_replace('\\.', ',DC=') }}"
+    _samba_rfc2307_id_start: "{{ samba_rfc2307_id_start | int }}"
+    # GID assignments for all default AD groups
+    _samba_gid_assignments:
+      domain_users: 100  # Standard POSIX users group GID
+      # domain_admins: Not assigned - preserves ID_TYPE_BOTH mapping
+      domain_computers: "{{ samba_rfc2307_id_start | int + 2 }}"
+      domain_controllers: "{{ samba_rfc2307_id_start | int + 3 }}"
+      domain_guests: "{{ samba_rfc2307_id_start | int + 4 }}"
+      schema_admins: "{{ samba_rfc2307_id_start | int + 5 }}"
+      enterprise_admins: "{{ samba_rfc2307_id_start | int + 6 }}"
+      group_policy_creator_owners: "{{ samba_rfc2307_id_start | int + 7 }}"
+      readonly_domain_controllers: "{{ samba_rfc2307_id_start | int + 8 }}"
+      dnsupdateproxy: "{{ samba_rfc2307_id_start | int + 9 }}"
+      enterprise_readonly_domain_controllers: "{{ samba_rfc2307_id_start | int + 10 }}"
+      dnsadmins: "{{ samba_rfc2307_id_start | int + 11 }}"
+      allowed_rodc_password_replication: "{{ samba_rfc2307_id_start | int + 12 }}"
+      denied_rodc_password_replication: "{{ samba_rfc2307_id_start | int + 13 }}"
+      ras_and_ias_servers: "{{ samba_rfc2307_id_start | int + 14 }}"
+      cert_publishers: "{{ samba_rfc2307_id_start | int + 15 }}"
+    # UID assignments for system accounts
+    _samba_uid_assignments:
+      krbtgt: "{{ samba_rfc2307_id_start | int }}"
+      guest: "{{ samba_rfc2307_id_start | int + 1 }}"
+      # administrator: Not assigned - prevents breaking root mapping
+    # Next counter values for ADUC NIS Extension
+    _samba_uid_next_counter: "{{ samba_rfc2307_id_start | int + 2 }}"
+    _samba_gid_next_counter: "{{ samba_rfc2307_id_start | int + 16 }}"
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Check if ypServ30 domain already exists
+  become: true
+  ansible.builtin.command:
+    # yamllint disable rule:line-length
+    cmd: >
+      ldbsearch -H /var/lib/samba/private/sam.ldb
+      -s base
+      -b "CN={{ samba_ad_info.netbios_domain_name | upper }},CN=ypservers,CN=ypServ30,CN=RpcServices,CN=System{{ _samba_ldap_suffix }}"
+      "(objectClass=msSFU30DomainInfo)"
+    # yamllint enable rule:line-length
+  register: _samba_ypserv30_check
+  failed_when: false
+  changed_when: false
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Check if RFC2307 marker file exists
+  become: true
+  ansible.builtin.stat:
+    path: '{{ samba_statedir }}/.samba_rfc2307_configured'
+  register: _samba_rfc2307_marker
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Create RFC2307 schema LDIF
+  become: true
+  ansible.builtin.template:
+    src: ldif/rfc2307.ldif.j2
+    dest: /tmp/rfc2307.ldif
+    owner: root
+    group: root
+    mode: '0600'
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - not _samba_rfc2307_marker.stat.exists
+    - '"0 records" in _samba_ypserv30_check.stdout or "returned 1 records" not in _samba_ypserv30_check.stdout'
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Apply RFC2307 schema extensions
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      ldbmodify -H /var/lib/samba/private/sam.ldb
+      /tmp/rfc2307.ldif
+      -U Administrator%{{ samba_ad_info.adminpass }}
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
+  register: _samba_rfc2307_result
+  changed_when: _samba_rfc2307_result.rc == 0
+  failed_when:
+    - _samba_rfc2307_result.rc != 0
+    - '"Already exists" not in _samba_rfc2307_result.stderr'
+    - '"Attribute or value exists" not in _samba_rfc2307_result.stderr'
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - not _samba_rfc2307_marker.stat.exists
+    - '"0 records" in _samba_ypserv30_check.stdout or "returned 1 records" not in _samba_ypserv30_check.stdout'
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Check if Domain Users group has gidNumber
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      ldbsearch -H /var/lib/samba/private/sam.ldb
+      "(&(objectClass=group)(cn=Domain Users))"
+      gidNumber
+  register: _samba_domain_users_gid_check
+  changed_when: false
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Add Unix attributes to Domain Users group
+  become: true
+  ansible.builtin.shell:
+    cmd: >
+      ldbmodify -H /var/lib/samba/private/sam.ldb
+      -U Administrator%{{ samba_ad_info.adminpass }}
+    stdin: |
+      dn: CN=Domain Users,CN=Users{{ _samba_ldap_suffix }}
+      changetype: modify
+      add: gidNumber
+      gidNumber: {{ _samba_gid_assignments.domain_users }}
+      -
+      add: msSFU30NisDomain
+      msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+      -
+      add: msSFU30Name
+      msSFU30Name: Domain Users
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
+  register: _samba_domain_users_rfc2307
+  changed_when: _samba_domain_users_rfc2307.rc == 0
+  failed_when:
+    - _samba_domain_users_rfc2307.rc != 0
+    - '"Attribute or value exists" not in _samba_domain_users_rfc2307.stderr'
+    - '"Entry already exists" not in _samba_domain_users_rfc2307.stderr'
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - _samba_domain_users_gid_check is defined
+    - '"gidNumber:" not in _samba_domain_users_gid_check.stdout'
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Create marker file for successful configuration
+  become: true
+  ansible.builtin.file:
+    path: '{{ samba_statedir }}/.samba_rfc2307_configured'
+    state: touch
+    mode: '0644'
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - _samba_rfc2307_result is defined
+    - _samba_rfc2307_result is changed
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Clean up LDIF file
+  become: true
+  ansible.builtin.file:
+    path: /tmp/rfc2307.ldif
+    state: absent
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Create Unix Admins group for administration
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      samba-tool group add "{{ samba_rfc2307_unix_admins_group }}"
+      --description="Unix administrators with Domain Admin privileges"
+      -U Administrator%{{ samba_ad_info.adminpass }}
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
+  register: _samba_unix_admins_create
+  changed_when: '"Added group" in _samba_unix_admins_create.stdout'
+  failed_when:
+    - _samba_unix_admins_create.rc != 0
+    - '"already exists" not in _samba_unix_admins_create.stderr | lower'
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - samba_rfc2307_create_unix_admins | bool
+    - _samba_rfc2307_result is defined or _samba_rfc2307_marker.stat.exists
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Get Unix Admins group DN
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      ldbsearch -H /var/lib/samba/private/sam.ldb
+      "(&(objectClass=group)(cn={{ samba_rfc2307_unix_admins_group }}))"
+      dn
+  register: _samba_unix_admins_dn
+  changed_when: false
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - samba_rfc2307_create_unix_admins | bool
+    - _samba_unix_admins_create is defined
+    - _samba_unix_admins_create is succeeded
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Add Unix Admins group to Administrators
+  become: true
+  ansible.builtin.shell:
+    cmd: >
+      ldbmodify -H /var/lib/samba/private/sam.ldb
+      -U Administrator%{{ samba_ad_info.adminpass }}
+    stdin: |
+      dn: CN=Administrators,CN=Builtin{{ _samba_ldap_suffix }}
+      changetype: modify
+      add: member
+      member: {{ (_samba_unix_admins_dn.stdout_lines | select('match', '^dn:') | list | first).replace('dn: ', '') }}
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
+  register: _samba_unix_admins_membership
+  changed_when: _samba_unix_admins_membership.rc == 0
+  failed_when:
+    - _samba_unix_admins_membership.rc != 0
+    - '"Attribute or value exists" not in _samba_unix_admins_membership.stderr'
+    - '"Entry already exists" not in _samba_unix_admins_membership.stderr'
+    - '"Attribute member already exists" not in _samba_unix_admins_membership.stderr'
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - samba_rfc2307_create_unix_admins | bool
+    - _samba_unix_admins_dn is defined
+    - _samba_unix_admins_dn.stdout is defined
+    - _samba_unix_admins_dn.stdout_lines | select('match', '^dn:') | list | length > 0
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Set gidNumber for Unix Admins group
+  become: true
+  ansible.builtin.shell:
+    cmd: >
+      ldbmodify -H /var/lib/samba/private/sam.ldb
+      -U Administrator%{{ samba_ad_info.adminpass }}
+    stdin: |
+      dn: CN={{ samba_rfc2307_unix_admins_group }},CN=Users{{ _samba_ldap_suffix }}
+      changetype: modify
+      add: gidNumber
+      gidNumber: {{ samba_rfc2307_id_start | int + 1 }}
+      -
+      add: msSFU30NisDomain
+      msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+      -
+      add: msSFU30Name
+      msSFU30Name: {{ samba_rfc2307_unix_admins_group }}
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
+  register: _samba_unix_admins_gid
+  failed_when:
+    - _samba_unix_admins_gid.rc != 0
+    - '"Attribute or value exists" not in _samba_unix_admins_gid.stderr'
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - samba_rfc2307_create_unix_admins | bool
+    - _samba_unix_admins_create is defined
+    - _samba_unix_admins_create is succeeded
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Verify RFC2307 configuration
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      ldbsearch -H /var/lib/samba/private/sam.ldb
+      "(objectClass=group)" gidNumber msSFU30NisDomain
+  register: _samba_rfc2307_verify
+  changed_when: false
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when: _samba_rfc2307_result is defined or _samba_rfc2307_marker.stat.exists
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307
+
+- name: RFC2307 | Display verification summary
+  ansible.builtin.debug:
+    msg: >
+      RFC2307 configuration complete.
+      Found {{ _samba_rfc2307_verify.stdout | regex_findall('gidNumber:') | length }} groups with GID numbers.
+      Unix Admins group created: {{ samba_rfc2307_create_unix_admins | bool }}.
+      Use 'Unix Admins' group for Unix administration instead of Domain Admins.
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  when:
+    - _samba_rfc2307_verify is defined
+    - _samba_rfc2307_verify.stdout is defined
+  tags:
+    - samba
+    - samba-ad
+    - samba-rfc2307

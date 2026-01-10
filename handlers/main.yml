@@ -40,6 +40,56 @@
   when:
     - samba_create_cluster|bool
 
+- name: Clean Samba runtime files
+  become: true
+  ansible.builtin.shell: |
+    # Stop all Samba-related services to ensure clean state
+    systemctl stop samba-ad-dc smbd nmbd winbind 2>/dev/null || true
+
+    # Clean up stale PID files
+    rm -f /run/samba/*.pid
+
+    # Clean up message queues and sockets that can cause startup issues
+    rm -rf /run/samba/msg.lock/* /run/samba/msg.sock/*
+    rm -f /var/lib/samba/private/msg.sock
+
+    # Clean up any stale lock files
+    find /run/samba -name "*.lock" -delete 2>/dev/null || true
+
+    # Ensure proper permissions on runtime directory
+    chown -R root:root /run/samba
+    chmod 755 /run/samba
+  changed_when: true
+
+- name: Restart systemd-resolved service
+  become: true
+  ansible.builtin.systemd_service:
+    name: systemd-resolved
+    state: restarted
+  when:
+    - samba_server_role == "active directory domain controller"
+    - samba_ad_info['backend_dns'] == 'SAMBA_INTERNAL'
+
+- name: Restart DNS services in correct order
+  become: true
+  ansible.builtin.shell: |
+    # Restart systemd-resolved first to free port 53 and apply new config
+    systemctl restart systemd-resolved
+
+    # Wait a moment for systemd-resolved to fully restart
+    sleep 2
+
+    # Now restart Samba AD DC so it can bind to IPv4 port 53
+    systemctl restart samba-ad-dc
+
+    # Verify both services are running
+    systemctl is-active systemd-resolved samba-ad-dc
+  when:
+    - samba_server_role == "active directory domain controller"
+    - samba_ad_info['backend_dns'] == 'SAMBA_INTERNAL'
+  register: dns_services_restart
+  changed_when: true
+
 - name: Restart SSH service
   become: true
   ansible.builtin.systemd_service:

@@ -41,41 +41,6 @@
     - samba-auth
     - samba-pam
 
-# Configure SSH access control for AD groups
-- name: Configure SSH to allow specific AD groups
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    line: "AllowGroups {{ samba_ssh_allow_groups | map('quote') | join(' ') }}"
-    regexp: '^AllowGroups'
-    state: present
-    backup: true
-  when:
-    - ssh_config_stat.stat.exists
-    - samba_ssh_allow_groups | length > 0
-    - samba_server_role in ['active directory domain controller', 'member server']
-  notify: Restart SSH service
-  tags:
-    - samba
-    - samba-auth
-    - samba-pam
-
-- name: Configure SSH to deny specific AD groups
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    line: "DenyGroups {{ samba_ssh_deny_groups | map('quote') | join(' ') }}"
-    regexp: '^DenyGroups'
-    state: present
-    backup: true
-  when:
-    - ssh_config_stat.stat.exists
-    - samba_ssh_deny_groups | length > 0
-    - samba_server_role in ['active directory domain controller', 'member server']
-  notify: Restart SSH service
-  tags:
-    - samba
-    - samba-auth
-    - samba-pam
-
 - name: Configure SSH to allow specific AD users
   ansible.builtin.lineinfile:
     path: /etc/ssh/sshd_config
@@ -86,23 +51,6 @@
   when:
     - ssh_config_stat.stat.exists
     - samba_ssh_allow_users | length > 0
-    - samba_server_role in ['active directory domain controller', 'member server']
-  notify: Restart SSH service
-  tags:
-    - samba
-    - samba-auth
-    - samba-pam
-
-- name: Configure SSH to deny specific AD users
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    line: "DenyUsers {{ samba_ssh_deny_users | map('quote') | join(' ') }}"
-    regexp: '^DenyUsers'
-    state: present
-    backup: true
-  when:
-    - ssh_config_stat.stat.exists
-    - samba_ssh_deny_users | length > 0
     - samba_server_role in ['active directory domain controller', 'member server']
   notify: Restart SSH service
   tags:

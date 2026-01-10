@@ -57,6 +57,22 @@ ansible-galaxy install kogito-ops.samba
 | Clustering (CTDB)           | ✅         | ✅    | ✅            |
 | systemd-resolved integration| ❌         | ✅    | ❌            |
 
+### AD DC features
+
+| Feature                     | Supported | Description                                      |
+| --------------------------- | --------- | ------------------------------------------------ |
+| Password policies           | ✅        | Complexity, history, age, length requirements    |
+| Account lockout policies    | ✅        | Threshold, duration, reset timer                 |
+| AD Recycle Bin              | ✅        | Deleted object recovery                          |
+| RFC2307 schema              | ✅        | Unix UID/GID attributes for domain accounts      |
+| SSH key schema              | ✅        | Centralized SSH public key management            |
+| Sudo schema                 | ✅        | Centralized sudo policy management               |
+| Service accounts            | ✅        | SPN, keytab export, password management          |
+| Organizational Units        | ✅        | OU creation, default computer container          |
+| Group Policy Objects        | ✅        | GPO creation, file deployment, OU linking        |
+| Domain user RFC2307         | ✅        | Auto-assign Unix attributes to domain users      |
+| Domain group RFC2307        | ✅        | Auto-assign Unix attributes to domain groups     |
+
 ## Configuration
 
 ### Basic usage
@@ -197,6 +213,152 @@ SRV   _ldap._tcp.dc._msdcs.<domain>          0 100 389 dc-hostname.<domain>
 
 - `samba_domain_groups`: List of domain groups to create
 - `samba_domain_users`: List of domain users to create
+- `samba_domain_service_accounts`: List of service accounts to create
+
+### AD domain controller settings
+
+#### RFC2307 schema extensions
+
+Enable Unix attributes for domain accounts:
+
+```yaml
+samba_enable_rfc2307: true
+samba_rfc2307_id_start: 10000                    # Base ID for default AD groups
+samba_rfc2307_domain_user_uid_start: 10100       # Starting UID for domain users
+samba_rfc2307_domain_group_gid_start: 10500      # Starting GID for domain groups
+samba_rfc2307_service_account_uid_start: 11000   # Starting UID for service accounts
+samba_rfc2307_create_unix_admins: true           # Create Unix Admins group
+```
+
+#### SSH key schema
+
+Store SSH public keys in AD user objects:
+
+```yaml
+samba_enable_ssh_schema: true
+```
+
+#### Sudo schema
+
+Store sudo rules in AD:
+
+```yaml
+samba_enable_sudo_schema: true
+samba_sudo_create_default_container: true
+samba_sudo_container_name: sudoers
+```
+
+#### Password policies
+
+```yaml
+samba_password_policy:
+  complexity: true
+  history_length: 24
+  min_age: 1
+  max_age: 42
+  min_length: 14
+```
+
+#### Account lockout policies
+
+```yaml
+samba_account_policy:
+  lockout_duration: 30
+  lockout_threshold: 5
+  reset_lockout_after: 30
+```
+
+#### Service accounts
+
+```yaml
+samba_create_domain_service_accounts: true
+samba_domain_service_accounts:
+  - name: svc_webapp
+    password: !vault |
+      $ANSIBLE_VAULT;1.1;AES256
+      ...
+    description: Web Application Service Account
+    password_never_expires: true
+    spn: HTTP/webapp.example.com
+    export_keytab: true
+    keytab_path: /etc/krb5.keytab.webapp
+    keytab_owner: www-data
+    keytab_group: www-data
+    keytab_mode: '0600'
+```
+
+#### Organizational Units
+
+```yaml
+samba_create_domain_organizational_units: true
+samba_domain_organizational_units:
+  - 'OU=Servers,DC=corp,DC=example,DC=com'
+  - 'OU=Workstations,DC=corp,DC=example,DC=com'
+samba_default_computer_ou: 'OU=Workstations,DC=corp,DC=example,DC=com'
+```
+
+#### Group Policy Objects
+
+```yaml
+samba_create_domain_group_policies: true
+samba_domain_group_policies:
+  - name: Security Settings
+    link_to:
+      - 'DC=corp,DC=example,DC=com'
+    link_option: enforced
+    policy_files:
+      - type: directory
+        path: 'Machine/Preferences/Groups'
+      - type: template
+        template: 'gpo/security.xml.j2'
+        dest: 'Machine/Preferences/Groups/Groups.xml'
+        mode: '0644'
+```
+
+#### Domain users with RFC2307 attributes
+
+When `samba_enable_rfc2307: true`, users automatically receive Unix attributes:
+
+```yaml
+samba_create_domain_users: true
+samba_domain_users:
+  - name: jdoe
+    password: !vault |
+      $ANSIBLE_VAULT;1.1;AES256
+      ...
+    given_name: John
+    surname: Doe
+    mail_address: jdoe@example.com
+    groups:
+      - Engineering
+      - VPN Users
+    # Optional RFC2307 overrides (auto-assigned if omitted):
+    # uid: 10150
+    # gid: 10500
+    # unix_home: /home/jdoe
+    # login_shell: /bin/bash
+```
+
+#### Domain groups with RFC2307 attributes
+
+```yaml
+samba_create_domain_groups: true
+samba_domain_groups:
+  - name: Engineering
+    description: Engineering Team
+    members:
+      - jdoe
+    # Optional: specific GID (auto-assigned if omitted)
+    # gid: 10500
+```
+
+#### AD Recycle Bin
+
+Enable deleted object recovery:
+
+```yaml
+samba_enable_recycle_bin: true
+```
 
 ### Share configuration
 
@@ -278,18 +440,38 @@ molecule converge -s member-server
 
 ## Limitations
 
+### Not yet implemented
+
+- SYSVOL replication between domain controllers
+- Domain functional level management
+- Domain backup and restore automation
+- LAPS (Local Administrator Password Solution) schema
+- Fine-grained password policies (PSOs)
+- Reverse DNS zone creation
+- Sites and Services management
+- Comprehensive health monitoring
+
+### Partial implementations
+
 - BIND9 DLZ backend is validated but not fully implemented
+- SPN management limited to service account creation (no list/delete)
+- DNS forwarder is global (per-DC configuration not supported)
+
+### External requirements
+
 - CTDB clustering requires manual recovery lock configuration
 - Certificate management for TLS must be handled externally
-- Domain member server testing in containers has networking limitations (resolved
-  with static IPs)
+- QEMU/KVM recommended for Molecule testing (full VM isolation for AD)
 
 ## Security considerations
 
 - **Always use Ansible Vault** for domain admin passwords in production
-- Default passwords include security warnings
-- Kerberos configuration uses modern encryption types for AD compatibility
 - All password-handling tasks use `no_log: true` to prevent credential exposure
+- Kerberos configuration uses modern encryption types (AES256, AES128)
+- LDAP signing enforcement enabled by default
+- Modern password hashing (CryptSHA256, CryptSHA512)
+- Service accounts created with `/bin/false` shell
+- Configurable password complexity and lockout policies
 
 ## Support and maintenance
 

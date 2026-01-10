@@ -17,6 +17,8 @@
     set -o pipefail
     printf '%s\n%s\n' {{ item['smbpasswd'] | quote }} {{ item['smbpasswd'] | quote }} | \
       smbpasswd -s -a {{ item['name'] | quote }}
+  args:
+    executable: /bin/bash
   register: create_samba_password_for_local_user
   changed_when: '"Added user" in create_samba_password_for_local_user.stdout'
   failed_when:

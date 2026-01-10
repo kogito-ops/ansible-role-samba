@@ -9,6 +9,10 @@ samba_create_domain_controller: false
 # Defines if the server should join a domain as a member server
 samba_join_domain: false
 
+# Clean up stale runtime files before starting Samba AD DC service
+# This helps prevent "Failed to cleanup temporary files" errors on restarts
+samba_cleanup_runtime_files: true
+
 # Legacy domain controller support
 # Enable this for joining legacy domain controllers that don't support encrypted LDAP
 # Common scenarios:
@@ -34,6 +38,53 @@ samba_domain_member:
 
 # Defines if groups defined in samba_domain_groups list should be created
 samba_create_domain_groups: false
+
+# Defines if organizational units defined in samba_domain_organizational_units list should be created
+samba_create_domain_organizational_units: false
+
+# Enable to hide organizational units output
+samba_domain_organizational_units_no_log: true
+
+# Define organizational units to create
+samba_domain_organizational_units:
+  []
+  # - 'OU=Domain Computers,DC=ad,DC=example,DC=com'
+  # - 'OU=Desktops,OU=Domain Computers,DC=ad,DC=example,DC=com'
+
+# Defines if Group Policy Objects defined in samba_domain_group_policies list should be created
+samba_create_domain_group_policies: false
+
+# Enable to hide Group Policy Objects output
+samba_domain_group_policies_no_log: true
+
+# Define Group Policy Objects to create and deploy
+samba_domain_group_policies:
+  []
+  # Example GPO configuration:
+  # - name: 'Network Drive Mappings'
+  #   link_to:
+  #     - 'DC=ad,DC=example,DC=com'  # Link to domain root
+  #     - 'OU=Workstations,DC=ad,DC=example,DC=com'  # Link to specific OU
+  #   link_option: 'enforced'  # Options: enforced, enabled, disabled
+  #   policy_files:
+  #     # Create directory structure
+  #     - type: directory
+  #       path: 'User/Preferences/Drives'
+  #     # Deploy from file source
+  #     - type: file
+  #       src: 'files/gpo/drives.xml'
+  #       dest: 'User/Preferences/Drives/Drives.xml'
+  #       mode: '0644'
+  #     # Deploy from Jinja2 template
+  #     - type: template
+  #       template: 'gpo/drives.xml.j2'
+  #       dest: 'User/Preferences/Drives/Drives.xml'
+  #       mode: '0644'
+  #     # Deploy inline content
+  #     - type: content
+  #       content: '<?xml version="1.0" encoding="utf-8"?><Drives></Drives>'
+  #       dest: 'User/Preferences/Drives/Drives.xml'
+  #       mode: '0644'
 
 # Defines if users defined in samba_domain_users list should be created
 samba_create_domain_users: false
@@ -135,22 +186,110 @@ samba_shares:
 # Enable to hide users output
 samba_domain_users_no_log: true
 
+# Domain users configuration
+# When samba_enable_rfc2307 is true, users automatically receive Unix attributes:
+#   - uidNumber: Auto-assigned from samba_rfc2307_domain_user_uid_start (default: 10100+)
+#   - gidNumber: Primary group GID (default: 10000 for Domain Users)
+#   - unixHomeDirectory: Unix home directory path (default: /home/<username>)
+#   - loginShell: User's shell (default: /bin/bash)
+#   - msSFU30NisDomain: NIS domain name for compatibility
+#   - msSFU30Name: Unix username
 samba_domain_users:
   []
-  # - name: test01
-  #   password: P@55w0rd
-  # - name: test02
-  #   password: P@55w0rd
+  # Basic user example (minimal configuration):
+  # - name: jdoe
+  #   password: 'SecureP@ssw0rd123!'  # SECURITY: Use Ansible Vault in production
+  #
+  # Full user example with all attributes:
+  # - name: jsmith
+  #   password: 'AnotherSecureP@ss456!'  # SECURITY: Use Ansible Vault in production
+  #   given_name: 'Jane'                 # First name
+  #   surname: 'Smith'                   # Last name
+  #   mail_address: 'jsmith@example.com' # Email address
+  #   description: 'Jane Smith - Engineering Lead'  # User description
+  #   use_username_as_cn: true           # Use username as CN (recommended)
+  #   account_disabled: false            # Enable account (default: false)
+  #   # Optional RFC2307 Unix attribute overrides (auto-assigned if omitted):
+  #   # uid: 10150                       # Specific UID (default: auto-increment from 10100)
+  #   # gid: 10500                       # Primary GID (default: 10000 = Domain Users)
+  #   # unix_home: '/home/jsmith'        # Home directory (default: /home/<username>)
+  #   # login_shell: '/bin/bash'         # Shell (default: /bin/bash)
 
 # Enable to hide groups output
 samba_domain_groups_no_log: true
 
+# Domain groups configuration
+# When samba_enable_rfc2307 is true, groups automatically receive Unix attributes:
+#   - gidNumber: Auto-assigned from samba_rfc2307_domain_group_gid_start (default: 10500+)
+#   - msSFU30NisDomain: NIS domain name for compatibility
+#   - msSFU30Name: Unix group name
 samba_domain_groups:
   []
-  # - name: ad-test-group1
+  # Basic group example (auto-assigned GID):
+  # - name: Engineering
+  #   description: 'Engineering Team'
   #   members:
-  #       - test01
-  #       - test02
+  #     - jdoe
+  #     - jsmith
+  #   # RFC2307: gidNumber will be auto-assigned (10500, 10501, 10502, ...)
+  #
+  # Group with specific GID (for legacy compatibility):
+  # - name: Executives
+  #   description: 'Executive Board (Vorstand)'
+  #   members:
+  #     - ceo
+  #     - cfo
+  #   gid: 502  # Specific GID for compatibility with legacy systems
+  #
+  # Group without members (members added later):
+  # - name: 'Service Accounts'
+  #   description: 'Group for all service accounts'
+  #   members: []
+
+# Defines if service accounts defined in samba_domain_service_accounts list should be created
+samba_create_domain_service_accounts: false
+
+# Enable to hide service accounts output (passwords, etc)
+samba_domain_service_accounts_no_log: true
+
+# Service accounts configuration
+# Service accounts are special user accounts for applications/services
+# When samba_enable_rfc2307 is true, service accounts automatically receive Unix attributes:
+#   - uidNumber: Auto-assigned from samba_rfc2307_service_account_uid_start (default: 11000+)
+#   - gidNumber: Primary group GID (default: 10000 for Domain Users or service account group)
+#   - unixHomeDirectory: Unix home directory path (default: /home/<username>)
+#   - loginShell: Shell for service account (default: /bin/false for security)
+#   - msSFU30NisDomain: NIS domain name for compatibility
+#   - msSFU30Name: Unix username
+samba_domain_service_accounts:
+  []
+  # Basic service account example (minimal configuration):
+  # - name: svc_postgres
+  #   password: 'SecureP@ssw0rd123!'        # SECURITY: Use Ansible Vault in production
+  #   description: 'PostgreSQL Service Account'
+  #   # RFC2307: uidNumber auto-assigned (11000, 11001, 11002, ...)
+  #   # RFC2307: loginShell defaults to /bin/false
+  #
+  # Service account with Kerberos keytab export:
+  # - name: svc_webapp
+  #   password: 'AnotherSecureP@ss456!'     # SECURITY: Use Ansible Vault in production
+  #   description: 'Web Application Service Account'
+  #   password_never_expires: true          # Service accounts should not expire (default: true)
+  #   account_disabled: false               # Enable account (default: false)
+  #   add_to_group: true                    # Add to service accounts group (default: true)
+  #   group: 'Service Accounts'             # Group name (default: 'Service Accounts')
+  #   spn: 'HTTP/webapp.example.com'       # Service Principal Name for Kerberos auth
+  #   export_keytab: true                   # Export Kerberos keytab file
+  #   keytab_path: '/etc/krb5.keytab.webapp'  # Path for keytab export
+  #   keytab_owner: 'www-data'              # Keytab file owner
+  #   keytab_group: 'www-data'              # Keytab file group
+  #   keytab_mode: '0600'                   # Keytab file permissions (read-only for owner)
+  #
+  # Service account with password update:
+  # - name: svc_ldap_reader
+  #   password: 'NewPassword789!'           # SECURITY: Use Ansible Vault in production
+  #   description: 'LDAP Reader Service Account'
+  #   update_password: true                 # Update password if account already exists
 
 samba_security: user
 
@@ -175,20 +314,10 @@ samba_home_umask: '0022'
 # When enabled, a 'homes' share will be automatically configured
 samba_home_share_enabled: true
 
-# SSH access control for AD groups/users
-samba_ssh_allow_groups:
-  - 'Domain Admins'
-  - 'SSH Users'
-  # - "Linux Admins"
-samba_ssh_deny_groups:
-  - 'Domain Guests'
-  # - "Contractors"
+# SSH access control for users
 samba_ssh_allow_users:
   []
   # - "admin@{{ samba_primary_domain }}"
-samba_ssh_deny_users:
-  []
-  # - "guest@{{ samba_primary_domain }}"
 
 # Password Policy Settings
 samba_password_policy:
@@ -209,8 +338,6 @@ samba_account_policy:
 samba_enhanced_provisioning_enabled: true
 samba_rpc_port_range: '49152-65535' # Dynamic RPC port range
 samba_security_options:
-  reject_md5_clients: true
-  reject_md5_servers: true
   require_strong_auth: true
   password_hash_schemes:
     - CryptSHA256
@@ -268,6 +395,43 @@ samba_recycle_bin_admin: Administrator
 samba_krb5_ticket_lifetime: 24h
 # Renewable ticket lifetime (in days)
 samba_krb5_renew_lifetime: 7d
+
+# RFC2307 Schema Configuration
+# Enable RFC2307 schema extensions for Unix/Linux attribute support
+# Required for Linux clients to get proper Unix attributes (UID, GID, shell, home)
+samba_enable_rfc2307: true
+# Starting UID/GID for RFC2307 ID mapping
+samba_rfc2307_id_start: 10000
+# Starting UID for domain users
+# This reserves UIDs 10100-10999 for regular domain users
+samba_rfc2307_domain_user_uid_start: 10100
+# Starting GID for domain groups
+# This reserves GIDs 10500-10999 for custom domain groups
+samba_rfc2307_domain_group_gid_start: 10500
+# Starting UID for service accounts
+# This reserves UIDs 11000+ for service accounts
+samba_rfc2307_service_account_uid_start: 11000
+# Create Unix Admin group (avoids Domain Admins GID mapping issues)
+samba_rfc2307_create_unix_admins: true
+# Unix Admins group name
+samba_rfc2307_unix_admins_group: 'Unix Admins'
+
+# SSH Key Schema Configuration
+# Enable SSH public key schema extensions for centralized SSH key management
+# Allows storing SSH public keys in AD user objects for centralized key distribution
+samba_enable_ssh_schema: true
+# Allow SSH key storage in AD user objects
+samba_ssh_schema_allow_public_keys: true
+
+# Sudo Schema Configuration
+# Enable Sudo schema extensions for centralized sudo rule management
+# Allows storing sudo rules in AD for centralized sudo configuration
+samba_enable_sudo_schema: true
+# Create default sudo rules container
+samba_sudo_create_default_container: true
+# Default sudo container OU name
+samba_sudo_container_name: 'sudoers'
+
 # Supported encryption types
 samba_krb5_enctypes:
   - aes256-cts-hmac-sha1-96

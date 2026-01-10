@@ -6,23 +6,29 @@
   register: _samba_domain_groups
   changed_when: false
   tags:
-    - samba
-    - samba-ad
-    - samba-domain-groups
+    - samba_domain_groups
+    - samba_service_accounts
+    - samba_domain_account_management
 
 - name: Domain groups | Ensure domain groups exist
   become: true
-  ansible.builtin.command: samba-tool group add {{ item['name'] }}
+  ansible.builtin.command: >
+    samba-tool group add "{{ item['name'] }}"
+    {% if item['description'] is defined %}--description="{{ item['description'] }}"{% endif %}
   register: domain_groups_create
   changed_when: '"Added group" in domain_groups_create.stdout'
+  failed_when:
+    - domain_groups_create.rc != 0
+    - '"already exists" not in domain_groups_create.stderr'
+    - '"already in use" not in domain_groups_create.stderr'
   loop: '{{ samba_domain_groups }}'
   when:
     - item['name'] not in _samba_domain_groups['stdout']
   no_log: '{{ samba_domain_groups_no_log | bool }}'
   tags:
-    - samba
-    - samba-ad
-    - samba-domain-groups
+    - samba_domain_groups
+    - samba_service_accounts
+    - samba_domain_account_management
 
 - name: Domain groups | Generate lists of domain group members
   become: true
@@ -33,21 +39,93 @@
   loop: '{{ samba_domain_groups }}'
   no_log: '{{ samba_domain_groups_no_log | bool }}'
   tags:
-    - samba
-    - samba-ad
-    - samba-domain-groups
+    - samba_domain_groups
+    - samba_service_accounts
+    - samba_domain_account_management
 
 - name: Domain groups | Ensure domain group members are added
   become: true
   ansible.builtin.command:
-    cmd: samba-tool group addmembers {{ item.0.item.name }} {{ item.1 }}
+    cmd: samba-tool group addmembers "{{ item.0.item.name }}" {{ item.1 }}
   register: domain_groups_member_add
-  changed_when: '"Added members to group" in domain_groups_member_add.stdout'
-  loop: "{{ _samba_domain_group_members['results'] | subelements('item.members') }}"
+  changed_when: '"Added members" in domain_groups_member_add.stdout'
+  failed_when:
+    - domain_groups_member_add.rc != 0
+    - '"already exists for target" not in domain_groups_member_add.stderr'
+    - '"is already a member of the group" not in domain_groups_member_add.stderr'
+  loop: "{{ _samba_domain_group_members['results'] | subelements('item.members', skip_missing=True) }}"
   when:
     - item[1] != [] and item[1] not in item[0]['stdout']
   no_log: '{{ samba_domain_groups_no_log | bool }}'
   tags:
-    - samba
-    - samba-ad
-    - samba-domain-groups
+    - samba_domain_groups
+    - samba_service_accounts
+    - samba_domain_account_management
+
+- name: Domain groups | Set facts for RFC2307 integration
+  ansible.builtin.set_fact:
+    _samba_ldap_suffix: ",DC={{ samba_ad_info.ad_dns_domain_name | regex_replace('\\.', ',DC=') }}"
+    _samba_domain_group_gid_start: "{{ samba_rfc2307_domain_group_gid_start | default(samba_rfc2307_id_start | int + 500) }}"
+  when:
+    - samba_enable_rfc2307 | default(false) | bool
+  tags:
+    - samba_domain_groups
+    - samba_service_accounts
+    - samba_domain_account_management
+
+- name: Domain groups | Check if domain groups have Unix attributes
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      ldbsearch -H /var/lib/samba/private/sam.ldb
+      "(&(objectClass=group)(cn={{ item['name'] }}))"
+      gidNumber
+  register: _samba_domain_group_unix_attrs
+  changed_when: false
+  loop: '{{ samba_domain_groups }}'
+  when:
+    - samba_enable_rfc2307 | default(false) | bool
+    - samba_domain_groups | length > 0
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
+  tags:
+    - samba_domain_groups
+    - samba_service_accounts
+    - samba_domain_account_management
+
+- name: Domain groups | Add Unix attributes (RFC2307) to domain groups
+  become: true
+  ansible.builtin.shell:
+    cmd: >
+      ldbmodify -H /var/lib/samba/private/sam.ldb
+      -U Administrator%{{ samba_ad_info.adminpass }}
+    stdin: |
+      dn: CN={{ item.item['name'] }},CN=Users{{ _samba_ldap_suffix }}
+      changetype: modify
+      add: gidNumber
+      gidNumber: {{ item.item['gid'] | default(_samba_domain_group_gid_start | int + index) }}
+      -
+      add: msSFU30NisDomain
+      msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+      -
+      add: msSFU30Name
+      msSFU30Name: {{ item.item['name'] }}
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
+  register: _samba_domain_group_rfc2307
+  changed_when: _samba_domain_group_rfc2307.rc == 0
+  failed_when:
+    - _samba_domain_group_rfc2307.rc != 0
+    - '"Attribute or value exists" not in _samba_domain_group_rfc2307.stderr'
+    - '"Entry already exists" not in _samba_domain_group_rfc2307.stderr'
+  loop: "{{ _samba_domain_group_unix_attrs.results | default([]) }}"
+  loop_control:
+    index_var: index
+  when:
+    - samba_enable_rfc2307 | default(false) | bool
+    - _samba_domain_group_unix_attrs is defined
+    - item.stdout is defined
+    - item.item['gid'] is defined or index >= 0
+    - '"gidNumber:" not in item.stdout'
+  tags:
+    - samba_domain_groups
+    - samba_service_accounts
+    - samba_domain_account_management

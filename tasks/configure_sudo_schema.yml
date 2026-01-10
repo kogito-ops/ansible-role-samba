@@ -1,0 +1,183 @@
+---
+# Configure Sudo Schema Extensions for Samba AD DC
+# This enables storing sudo rules in Active Directory
+# Prerequisites: Domain must be provisioned and operational
+#
+# NOTE: Schema modifications require stopping Samba because the schema
+# module blocks changes while the service is running.
+
+- name: Sudo Schema | Check if Sudo schema is already applied
+  ansible.builtin.stat:
+    path: /var/lib/samba/.sudo_schema_applied
+  register: _sudo_schema_marker
+
+- name: Sudo Schema | Check if sudoRole class exists
+  become: true
+  # yamllint disable rule:line-length
+  ansible.builtin.shell: |
+    set -o pipefail
+    ldbsearch -H /var/lib/samba/private/sam.ldb \
+      -b "CN=Schema,CN=Configuration,{{ samba_ad_info.ad_dns_domain_name | upper | regex_replace('\.', ',DC=') | regex_replace('^', 'DC=') }}" \
+      "(cn=sudoRole)" cn 2>/dev/null | grep -c "^cn: sudoRole" || true
+  # yamllint enable rule:line-length
+  args:
+    executable: /bin/bash
+  register: _sudo_schema_exists
+  changed_when: false
+
+- name: Sudo Schema | Display current schema status
+  ansible.builtin.debug:
+    msg: "Sudo schema status: {{ 'Already applied' if (_sudo_schema_marker.stat.exists or _sudo_schema_exists.stdout | int > 0) else 'Not yet applied' }}"  # yamllint disable-line rule:line-length
+
+- name: Sudo Schema | Apply Sudo schema extensions
+  when:
+    - not _sudo_schema_marker.stat.exists
+    - _sudo_schema_exists.stdout | int == 0
+  block:
+    - name: Sudo Schema | Generate Sudo schema LDIF
+      become: true
+      ansible.builtin.template:
+        src: ldif/sudo_schema.ldif.j2
+        dest: /tmp/sudo_schema.ldif
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Sudo Schema | Stop Samba AD DC service for schema modification
+      become: true
+      ansible.builtin.service:
+        name: samba-ad-dc
+        state: stopped
+      register: _samba_stopped_for_sudo_schema
+
+    - name: Sudo Schema | Apply Sudo schema to AD
+      become: true
+      # yamllint disable rule:line-length
+      ansible.builtin.command:
+        cmd: ldbmodify -H /var/lib/samba/private/sam.ldb /tmp/sudo_schema.ldif
+      # yamllint enable rule:line-length
+      register: _sudo_schema_apply
+      changed_when: _sudo_schema_apply.rc == 0
+
+    - name: Sudo Schema | Start Samba AD DC service after schema modification
+      become: true
+      ansible.builtin.service:
+        name: samba-ad-dc
+        state: started
+      when: _samba_stopped_for_sudo_schema is changed
+
+    - name: Sudo Schema | Wait for Samba to be ready
+      become: true
+      ansible.builtin.command:
+        cmd: samba-tool testparm --suppress-prompt
+      register: _samba_ready
+      until: _samba_ready.rc == 0
+      retries: 10
+      delay: 3
+      changed_when: false
+      when: _samba_stopped_for_sudo_schema is changed
+
+    - name: Sudo Schema | Verify schema was applied
+      become: true
+      # yamllint disable rule:line-length
+      ansible.builtin.shell: |
+        set -o pipefail
+        ldbsearch -H /var/lib/samba/private/sam.ldb \
+          -b "CN=Schema,CN=Configuration,{{ samba_ad_info.ad_dns_domain_name | upper | regex_replace('\.', ',DC=') | regex_replace('^', 'DC=') }}" \
+          "(cn=sudoRole)" cn 2>/dev/null | grep -q "^cn: sudoRole"
+      # yamllint enable rule:line-length
+      args:
+        executable: /bin/bash
+      register: _sudo_schema_verify_applied
+      failed_when: _sudo_schema_verify_applied.rc != 0
+
+    - name: Sudo Schema | Create marker file
+      become: true
+      ansible.builtin.file:
+        path: /var/lib/samba/.sudo_schema_applied
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Sudo Schema | Clean up temporary LDIF
+      ansible.builtin.file:
+        path: /tmp/sudo_schema.ldif
+        state: absent
+
+  rescue:
+    - name: Sudo Schema | Ensure Samba is started after failure
+      become: true
+      ansible.builtin.service:
+        name: samba-ad-dc
+        state: started
+      when: _samba_stopped_for_sudo_schema is defined and _samba_stopped_for_sudo_schema is changed
+
+    - name: Sudo Schema | Clean up temporary LDIF on failure
+      ansible.builtin.file:
+        path: /tmp/sudo_schema.ldif
+        state: absent
+
+    - name: Sudo Schema | Fail with error message
+      ansible.builtin.fail:
+        msg: "Failed to apply Sudo schema. Check /tmp/sudo_schema_apply.log for details."
+
+- name: Sudo Schema | Verify Sudo schema is functional
+  become: true
+  # yamllint disable rule:line-length
+  ansible.builtin.shell: |
+    set -o pipefail
+    # Check that key sudo attributes exist
+    missing_attrs=""
+    for attr in sudoUser sudoHost sudoCommand sudoOption sudoRunAsUser sudoRunAsGroup sudoOrder; do
+      if ! ldbsearch -H /var/lib/samba/private/sam.ldb \
+           -b "CN=Schema,CN=Configuration,{{ samba_ad_info.ad_dns_domain_name | upper | regex_replace('\.', ',DC=') | regex_replace('^', 'DC=') }}" \
+           "(cn=$attr)" cn 2>/dev/null | grep -q "^cn: $attr"; then
+        missing_attrs="$missing_attrs $attr"
+      fi
+    done
+
+    if [ -n "$missing_attrs" ]; then
+      echo "ERROR: Missing sudo attributes:$missing_attrs" >&2
+      exit 1
+    fi
+
+    # Check that sudoRole class exists
+    if ! ldbsearch -H /var/lib/samba/private/sam.ldb \
+         -b "CN=Schema,CN=Configuration,{{ samba_ad_info.ad_dns_domain_name | upper | regex_replace('\.', ',DC=') | regex_replace('^', 'DC=') }}" \
+         "(cn=sudoRole)" cn 2>/dev/null | grep -q "^cn: sudoRole"; then
+      echo "ERROR: sudoRole class not found in schema" >&2
+      exit 1
+    fi
+
+    echo "Sudo schema verification successful - all attributes and classes present"
+  # yamllint enable rule:line-length
+  args:
+    executable: /bin/bash
+  register: _sudo_schema_verify
+  changed_when: false
+  failed_when: _sudo_schema_verify.rc != 0
+
+- name: Sudo Schema | Check if sudoers container exists
+  become: true
+  # yamllint disable rule:line-length
+  ansible.builtin.shell: |
+    set -o pipefail
+    ldbsearch -H /var/lib/samba/private/sam.ldb \
+      -b "{{ samba_ad_info.ad_dns_domain_name | upper | regex_replace('\.', ',DC=') | regex_replace('^', 'DC=') }}" \
+      "(ou={{ samba_sudo_container_name }})" ou 2>/dev/null | grep -c "^ou: {{ samba_sudo_container_name }}" || true
+  # yamllint enable rule:line-length
+  args:
+    executable: /bin/bash
+  register: _sudo_container_exists
+  changed_when: false
+  when: samba_sudo_create_default_container | bool
+
+- name: Sudo Schema | Display container status
+  ansible.builtin.debug:
+    msg: "Sudoers container '{{ samba_sudo_container_name }}': {{ 'exists' if _sudo_container_exists.stdout | default('0') | int > 0 else 'will be created' if samba_sudo_create_default_container else 'not configured' }}"  # yamllint disable-line rule:line-length
+  when: samba_sudo_create_default_container | bool
+
+- name: Sudo Schema | Display verification results
+  ansible.builtin.debug:
+    msg: "{{ _sudo_schema_verify.stdout }}"

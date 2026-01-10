@@ -27,18 +27,19 @@
 - name: Join domain | Joining Domain
   become: true
   ansible.builtin.shell:
+    # yamllint disable rule:line-length
     cmd: |
       samba-tool domain join \
         {{ samba_domain_member.domain | default(samba_ad_info['ad_dns_domain_name']) }} \
         DC \
         --server="{{ samba_primary_domain_controller }}" \
         --username="{{ samba_domain_member.domain_admin_user | default('Administrator') }}" \
-        --password="{{ samba_domain_member.domain_admin_password | default(samba_ad_info['adminpass']) }}" \
-        {% if samba_allow_unencrypted_ldap | default(false) | bool %}\
+        --password="{{ samba_domain_member.domain_admin_password | default(samba_ad_info['adminpass']) }}"{% if samba_allow_unencrypted_ldap | default(false) | bool %} \
         --option='ldap server require strong auth=no' \
         --option='client ldap sasl wrapping=plain'{% endif %}
+    # yamllint enable rule:line-length
   register: _samba_domain_joined
-  no_log: true
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
   failed_when:
     - _samba_domain_joined.rc != 0
     - '"Joined domain" not in _samba_domain_joined.stdout'

@@ -16,48 +16,29 @@
     - samba-ad
     - samba-policies
 
-# Parse current settings
+# Parse current settings - using single-line expressions to avoid YAML folding issues
 - name: Password Policy | Parse current settings
   ansible.builtin.set_fact:
     _current_password_policy:
-      complexity: >-
-        {{ current_password_settings.stdout | regex_search('Password complexity: (on|off)', '\\1')
-           | default(['off']) | first }}
-
-      history_length: >-
-        {{ current_password_settings.stdout | regex_search('Password history length: (\\d+)', '\\1')
-           | default(['0']) | first }}
-
-      min_length: >-
-        {{ current_password_settings.stdout | regex_search('Minimum password length: (\\d+)', '\\1')
-           | default(['0']) | first }}
-
-      min_age: >-
-        {{ current_password_settings.stdout | regex_search('Minimum password age \\(days\\): (\\d+)', '\\1')
-           | default(['0']) | first }}
-
-      max_age: >-
-        {{ current_password_settings.stdout | regex_search('Maximum password age \\(days\\): (\\d+)', '\\1')
-           | default(['0']) | first }}
-
-      lockout_duration: >-
-        {{ current_password_settings.stdout | regex_search('Account lockout duration \\(mins\\): (\\d+)', '\\1')
-           | default(['0']) | first }}
-
-      lockout_threshold: >-
-        {{ current_password_settings.stdout | regex_search('Account lockout threshold \\(attempts\\): (\\d+)', '\\1')
-           | default(['0']) | first }}
-
-      reset_lockout_after: >-
-        {{ current_password_settings.stdout | regex_search('Reset account lockout after \\(mins\\): (\\d+)', '\\1')
-           | default(['0']) | first }}
-
+      # yamllint disable rule:line-length
+      complexity: "{{ ((current_password_settings.stdout | regex_findall('Password complexity: (on|off)') | list + ['off']) | first) | trim }}"
+      history_length: "{{ ((current_password_settings.stdout | regex_findall('Password history length: (\\d+)') | list + ['0']) | first) | trim | int }}"
+      min_length: "{{ ((current_password_settings.stdout | regex_findall('Minimum password length: (\\d+)') | list + ['0']) | first) | trim | int }}"
+      min_age: "{{ ((current_password_settings.stdout | regex_findall('Minimum password age \\(days\\): (\\d+)') | list + ['0']) | first) | trim | int }}"
+      max_age: "{{ ((current_password_settings.stdout | regex_findall('Maximum password age \\(days\\): (\\d+)') | list + ['0']) | first) | trim | int }}"
+      lockout_duration: "{{ ((current_password_settings.stdout | regex_findall('Account lockout duration \\(mins\\): (\\d+)') | list + ['0']) | first) | trim | int }}"
+      lockout_threshold: "{{ ((current_password_settings.stdout | regex_findall('Account lockout threshold \\(attempts\\): (\\d+)') | list + ['0']) | first) | trim | int }}"
+      reset_lockout_after: "{{ ((current_password_settings.stdout | regex_findall('Reset account lockout after \\(mins\\): (\\d+)') | list + ['0']) | first) | trim | int }}"
+      # yamllint enable rule:line-length
   delegate_to: '{{ samba_primary_domain_controller }}'
   run_once: true
   when:
     - samba_server_role == "active directory domain controller"
     - _samba_domain_exists | default(false)
     - current_password_settings is defined
+    - current_password_settings is not skipped
+    - current_password_settings.stdout is defined
+    - current_password_settings.stdout | length > 0
   tags:
     - samba
     - samba-ad
@@ -68,14 +49,17 @@
   ansible.builtin.set_fact:
     _password_policy_needs_update: >-
       {{
-        (_current_password_policy.complexity !=
+        (_current_password_policy.complexity | trim !=
          (samba_password_policy.complexity_enabled | bool | ternary('on', 'off'))) or
-        (_current_password_policy.history_length | int != samba_password_policy.history_length | int) or
-        (_current_password_policy.min_length | int != samba_password_policy.min_length | int) or
-        (_current_password_policy.min_age | int != samba_password_policy.min_age | int) or
-        (_current_password_policy.max_age | int != samba_password_policy.max_age | int)
+        (_current_password_policy.history_length | int !=
+         samba_password_policy.history_length | int) or
+        (_current_password_policy.min_length | int !=
+         samba_password_policy.min_length | int) or
+        (_current_password_policy.min_age | int !=
+         samba_password_policy.min_age | int) or
+        (_current_password_policy.max_age | int !=
+         samba_password_policy.max_age | int)
       }}
-
   delegate_to: '{{ samba_primary_domain_controller }}'
   run_once: true
   when:
@@ -91,14 +75,11 @@
 - name: Password Policy | Apply password policy settings
   become: true
   ansible.builtin.command:
+    # yamllint disable rule:line-length
     cmd: >
-      samba-tool domain passwordsettings set
-      --complexity={{ samba_password_policy.complexity_enabled | bool | ternary('on', 'off') }}
-      --history-length={{ samba_password_policy.history_length }}
-      --max-pwd-age={{ samba_password_policy.max_age }}
-      --min-pwd-age={{ samba_password_policy.min_age }}
-      --min-pwd-length={{ samba_password_policy.min_length }}
+      samba-tool domain passwordsettings set --complexity={{ samba_password_policy.complexity_enabled | bool | ternary('on', 'off') }} --history-length={{ samba_password_policy.history_length }} --max-pwd-age={{ samba_password_policy.max_age }} --min-pwd-age={{ samba_password_policy.min_age }} --min-pwd-length={{ samba_password_policy.min_length }}
 
+    # yamllint enable rule:line-length
   delegate_to: '{{ samba_primary_domain_controller }}'
   run_once: true
   changed_when: _password_policy_needs_update | default(false)
@@ -117,12 +98,14 @@
     _account_policy_needs_update: >-
       {{
         (samba_account_policy.lockout_threshold | int > 0) and (
-          (_current_password_policy.lockout_duration | int != samba_account_policy.lockout_duration | int) or
-          (_current_password_policy.lockout_threshold | int != samba_account_policy.lockout_threshold | int) or
-          (_current_password_policy.reset_lockout_after | int != samba_account_policy.reset_lockout_after | int)
+          (_current_password_policy.lockout_duration | int !=
+           samba_account_policy.lockout_duration | int) or
+          (_current_password_policy.lockout_threshold | int !=
+           samba_account_policy.lockout_threshold | int) or
+          (_current_password_policy.reset_lockout_after | int !=
+           samba_account_policy.reset_lockout_after | int)
         )
       }}
-
   delegate_to: '{{ samba_primary_domain_controller }}'
   run_once: true
   when:
@@ -138,12 +121,11 @@
 - name: Account Policy | Apply account lockout policy
   become: true
   ansible.builtin.command:
+    # yamllint disable rule:line-length
     cmd: >
-      samba-tool domain passwordsettings set
-      --account-lockout-duration={{ samba_account_policy.lockout_duration }}
-      --account-lockout-threshold={{ samba_account_policy.lockout_threshold }}
-      --reset-account-lockout-after={{ samba_account_policy.reset_lockout_after }}
+      samba-tool domain passwordsettings set --account-lockout-duration={{ samba_account_policy.lockout_duration }} --account-lockout-threshold={{ samba_account_policy.lockout_threshold }} --reset-account-lockout-after={{ samba_account_policy.reset_lockout_after }}
 
+    # yamllint enable rule:line-length
   delegate_to: '{{ samba_primary_domain_controller }}'
   run_once: true
   changed_when: _account_policy_needs_update | default(false)

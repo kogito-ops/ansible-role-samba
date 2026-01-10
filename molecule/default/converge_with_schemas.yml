@@ -1,0 +1,17 @@
+---
+# Converge playbook with schema extensions forced on
+- name: Converge with Schemas
+  hosts: all
+  become: true
+
+  vars:
+      ansible_python_interpreter: auto_silent
+      # Force schema extensions to be enabled regardless of marker file
+      samba_enable_rfc2307: true
+      samba_enable_ssh_schema: true
+      samba_enable_sudo_schema: true
+      # Disable runtime cleanup for testing
+      samba_cleanup_runtime_files: false
+
+  roles:
+      - role: kogito-ops.samba

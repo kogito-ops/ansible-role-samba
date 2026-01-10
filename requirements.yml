@@ -1,0 +1,8 @@
+---
+# Role dependencies (none required)
+roles: []
+
+# Collection dependencies
+collections:
+  - name: ansible.posix
+  - name: community.general

@@ -9,7 +9,7 @@
     mode: '0755'
   when:
     - samba_create_domain_controller is defined
-    - samba_create_domain_controller | bool
+    - samba_create_domain_controller|bool
     - samba_server_role == "active directory domain controller"
     - samba_ad_info['backend_dns'] == 'SAMBA_INTERNAL'
   tags:
@@ -26,9 +26,10 @@
     mode: '0644'
   when:
     - samba_create_domain_controller is defined
-    - samba_create_domain_controller | bool
+    - samba_create_domain_controller|bool
     - samba_server_role == "active directory domain controller"
     - samba_ad_info['backend_dns'] == 'SAMBA_INTERNAL'
+  notify: Restart DNS services in correct order
   tags:
     - samba
     - samba-configure
@@ -42,7 +43,7 @@
     group: root
     mode: '0644'
   when:
-    - samba_create_cluster | bool
+    - samba_create_cluster|bool
   notify:
     - Restart Clustered TDB
   tags:

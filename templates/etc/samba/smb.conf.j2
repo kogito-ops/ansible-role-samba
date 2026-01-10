@@ -89,28 +89,24 @@
 # option cannot handle dynamic or non-broadcast interfaces correctly.
 ;   bind interfaces only = yes
 
-{% if samba_tls_enable | bool %}
+{% if samba_tls_enable|bool %}
    tls enabled  = yes
    tls keyfile  = {{ samba_tls_key }}
    tls certfile = {{ samba_tls_certificate }}
    tls cafile   = {{ samba_tls_ca_certificate }}
 {% endif %}
 
-{% if samba_enhanced_provisioning_enabled | bool and samba_server_role == "active directory domain controller" %}
+{% if samba_enhanced_provisioning_enabled|bool and samba_server_role == "active directory domain controller" %}
 #### Enhanced Security Settings ####
 
 # RPC server configuration
    rpc server dynamic port range = {{ samba_rpc_port_range }}
 
 # Security options
-{% if samba_security_options.reject_md5_clients | bool %}
-   reject md5 clients = yes
-{% endif %}
-{% if samba_security_options.reject_md5_servers | bool %}
-   reject md5 servers = yes
-{% endif %}
-{% if samba_security_options.require_strong_auth | bool %}
+{% if samba_security_options.require_strong_auth|bool %}
    ldap server require strong auth = yes
+{% else %}
+   ldap server require strong auth = no
 {% endif %}
 
 # Password hash schemes
@@ -197,7 +193,7 @@
 # NOTE: Must be store in 'DOS' file format convention
 ;   logon script = logon.cmd
 
-{% if samba_enhanced_provisioning_enabled | bool and samba_server_role == "active directory domain controller" %}
+{% if samba_enhanced_provisioning_enabled|bool and samba_server_role == "active directory domain controller" %}
 # User and group management scripts
    add machine script = /usr/sbin/useradd -N -M -g Domain-Computer -d /dev/null -s /bin/false %u
    add user script = /usr/sbin/useradd %u
@@ -249,7 +245,7 @@
 
 #======================= Share Definitions =======================
 
-{% if samba_home_share_enabled | bool %}
+{% if samba_home_share_enabled|bool %}
 # Home directory shares - each user's home directory as \\server\username
 [homes]
    comment = Home Directories
@@ -288,15 +284,32 @@
 {% endif %}
 
 {% if samba_server_role == "active directory domain controller" %}
-# Un-comment the following and create the netlogon directory for Domain Logons
-# (you need to configure Samba to act as a domain controller too.)
+# SYSVOL and NETLOGON shares for Active Directory Domain Controller
+# These shares are used for Group Policy distribution and logon scripts
+#
+# Configuration requirements:
+# - "read only = No" is required for AD DC (filesystem ACLs control actual permissions)
+# - "case sensitive = no" is required for Windows GPO file compatibility (GPT.INI vs gpt.ini)
+# - "smb encrypt = desired" enables SMB3 encryption for modern Windows clients
+# - VFS modules: dfs_samba4 is required for DFS referrals
+#
+# Note: full_audit VFS module is currently disabled due to compatibility issues causing
+# NT_STATUS_UNSUCCESSFUL errors. Alternative audit solutions should be implemented at the
+# syslog or external monitoring level.
 [sysvol]
+        comment = Active Directory SYSVOL share
         path = {{ samba_datadir }}/sysvol
         read only = No
+        case sensitive = no
+        smb encrypt = desired
+        vfs objects = dfs_samba4 acl_xattr
 
 [netlogon]
+        comment = Active Directory NETLOGON share
         path = {{ samba_datadir }}/sysvol/{{ samba_ad_info.kerberos_realm | lower }}/scripts
         read only = No
+        case sensitive = no
+        smb encrypt = desired
 {% endif %}
 
 # Un-comment the following and create the profiles directory to store
@@ -342,16 +355,16 @@
 
 {%   for item in samba_shares %}
 [{{ item.name }}]
-browsable = {{ item.browsable | lower }}
-guest ok = {{ item.guest_ok | lower }}
+browsable = {{ item.browsable|lower }}
+guest ok = {{ item.guest_ok|lower }}
 path = {{ samba_shares_path }}/{{ item.name }}
 {%     if item.read_only is defined %}
-read only = {{ item.read_only | lower }}
+read only = {{ item.read_only|lower }}
 {%     endif %}
 {%     if item.valid_users is defined %}
 valid users = {{ item.valid_users }}
 {%     endif %}
-writable = {{ item.writable | lower }}
+writable = {{ item.writable|lower }}
 
 {%   endfor %}
 {% endif %}

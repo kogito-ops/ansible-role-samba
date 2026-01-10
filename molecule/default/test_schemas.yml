@@ -1,0 +1,18 @@
+---
+# Standalone playbook to test schema extensions
+# Run with: molecule converge -s default -- --extra-vars="@molecule/default/test_schemas.yml"
+- name: Test Schema Extensions
+  hosts: all
+  become: true
+
+  vars:
+      ansible_python_interpreter: auto_silent
+      # Force schema extensions to be enabled
+      samba_enable_rfc2307: true
+      samba_enable_ssh_schema: true
+      samba_enable_sudo_schema: true
+      # Disable runtime cleanup for testing
+      samba_cleanup_runtime_files: false
+
+  roles:
+      - role: kogito-ops.samba

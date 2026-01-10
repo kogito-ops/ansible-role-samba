@@ -1,16 +1,18 @@
 ---
 - name: Pre-Flight Checks | Check supported operating system
   ansible.builtin.assert:
+    # yamllint disable rule:line-length
     that:
       - ansible_distribution in ['Ubuntu', 'Debian']
       - >-
-        (ansible_distribution == 'Ubuntu' and ansible_distribution_version in ['22.04', '24.04'])
-        or (ansible_distribution == 'Debian' and ansible_distribution_major_version == '12')
+        (ansible_distribution == 'Ubuntu' and ansible_distribution_version in ['22.04', '24.04']) or (ansible_distribution == 'Debian' and ansible_distribution_major_version == '12')
 
+    # yamllint enable rule:line-length
+    # yamllint disable rule:line-length
     fail_msg: >-
-      This role only supports Ubuntu 22.04 (Jammy), Ubuntu 24.04 (Noble), and Debian 12 (Bookworm).
-      Current system: {{ ansible_distribution }} {{ ansible_distribution_version }}
+      This role only supports Ubuntu 22.04 (Jammy), Ubuntu 24.04 (Noble), and Debian 12 (Bookworm). Current system: {{ ansible_distribution }} {{ ansible_distribution_version }}
 
+    # yamllint enable rule:line-length
     success_msg: 'Operating system {{ ansible_distribution }} {{ ansible_distribution_version }} is supported'
   tags:
     - samba
@@ -20,10 +22,11 @@
   ansible.builtin.assert:
     that:
       - ansible_architecture in ['x86_64', 'aarch64']
+    # yamllint disable rule:line-length
     fail_msg: >-
-      This role only supports amd64 (x86_64) and arm64 (aarch64) architectures.
-      Current architecture: {{ ansible_architecture }}
+      This role only supports amd64 (x86_64) and arm64 (aarch64) architectures. Current architecture: {{ ansible_architecture }}
 
+    # yamllint enable rule:line-length
     success_msg: 'Architecture {{ ansible_architecture }} is supported'
   tags:
     - samba
@@ -58,7 +61,7 @@
     fail_msg: "`samba_server_role` must be 'standalone server' when `samba_create_domain_controller` is disabled"
     success_msg: 'Samba standalone server creation is enabled'
   when:
-    - not samba_create_domain_controller | bool
+    - not samba_create_domain_controller|bool
     - samba_server_role not in ['member server', 'active directory domain controller']
   tags:
     - samba
@@ -68,12 +71,14 @@
   ansible.builtin.assert:
     that:
       - samba_server_role == 'active directory domain controller'
+    # yamllint disable rule:line-length
     fail_msg: >-
       `samba_server_role` must be 'active directory domain controller' when `samba_create_domain_controller` is enabled
 
+    # yamllint enable rule:line-length
     success_msg: 'Samba AD Domain Controller creation is enabled'
   when:
-    - samba_create_domain_controller | bool
+    - samba_create_domain_controller|bool
   tags:
     - samba
     - samba-assertions
@@ -85,7 +90,7 @@
     fail_msg: 'DNS backend can only be `SAMBA_INTERNAL` or `BIND9_DLZ`.'
     success_msg: 'Samba AD Domain Controller DNS backend is enabled'
   when:
-    - samba_create_domain_controller | bool
+    - samba_create_domain_controller|bool
   tags:
     - samba
     - samba-assertions
@@ -99,13 +104,14 @@
       - samba_ad_info.kerberos_realm is defined
       - samba_ad_info.netbios_domain_name is defined
       - samba_ad_info.backend_dns is defined
+    # yamllint disable rule:line-length
     fail_msg: >-
-      When creating a domain controller, samba_ad_info must be defined with adminpass,
-      kerberos_realm, netbios_domain_name, and backend_dns
+      When creating a domain controller, samba_ad_info must be defined with adminpass, kerberos_realm, netbios_domain_name, and backend_dns
 
+    # yamllint enable rule:line-length
     success_msg: 'Required AD configuration is properly defined'
   when:
-    - samba_create_domain_controller | bool
+    - samba_create_domain_controller|bool
   tags:
     - samba
     - samba-assertions
@@ -119,7 +125,7 @@
     fail_msg: 'samba_domain_controllers_group must be defined and contain at least one host'
     success_msg: 'Domain controllers group is properly defined'
   when:
-    - samba_create_domain_controller | bool
+    - samba_create_domain_controller|bool
   tags:
     - samba
     - samba-assertions
@@ -130,13 +136,15 @@
       - samba_tls_key is defined
       - samba_tls_certificate is defined
       - samba_tls_ca_certificate is defined
+    # yamllint disable rule:line-length
     fail_msg: >-
       When samba_tls_enable is true, you must define samba_tls_key, samba_tls_certificate, and samba_tls_ca_certificate
 
+    # yamllint enable rule:line-length
     success_msg: 'TLS configuration is properly defined'
   when:
     - samba_tls_enable is defined
-    - samba_tls_enable | bool
+    - samba_tls_enable|bool
   tags:
     - samba
     - samba-assertions

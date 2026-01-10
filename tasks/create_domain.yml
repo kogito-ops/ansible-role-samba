@@ -38,41 +38,60 @@
     - samba-ad
     - samba-domain
 
+- name: Create domain | Check if AD database exists
+  ansible.builtin.stat:
+    path: '{{ samba_datadir }}/private/sam.ldb'
+  register: samba_ad_database_check
+  tags:
+    - samba_domain
+
 - name: Create domain | configuring Active Directory # yamllint disable rule:line-length
   become: true
   ansible.builtin.command:
     cmd: >-
-      samba-tool domain provision --dns-backend='{{ samba_ad_info['backend_dns'] }}' --realm='{{ samba_ad_info['kerberos_realm'] | upper }}' --domain='{{ samba_ad_info['netbios_domain_name'] | upper }}' --adminpass='{{ samba_ad_info['adminpass'] }}' --machinepass='{{ samba_ad_info['machinepass'] }}' --backend-store='{{ _samba_backend_store }}' --server-role='dc' --use-rfc2307 --host-name='{{ ansible_hostname }}' --host-ip='{{ ansible_default_ipv4.address }}' {% if samba_enhanced_provisioning_enabled | bool -%} --option="dns forwarder={{ samba_ad_info.dns_forwarder }}" --option="rpc server dynamic port range={{ samba_rpc_port_range }}" {% if samba_security_options.reject_md5_clients | bool -%} --option="reject md5 clients = yes" {% endif -%} {% if samba_security_options.reject_md5_servers | bool -%} --option="reject md5 servers = yes" {% endif -%} {% if samba_security_options.require_strong_auth | bool -%} --option="ldap server require strong auth = yes" {% endif -%} --option="add machine script={{ samba_useradd_command }} -N -M -g Domain-Computer -d {{ samba_system_homedir }} -s {{ samba_system_shell }} %u" --option="add user script={{ samba_useradd_command }} %u" --option="add group script={{ samba_groupadd_command }} %g" --option="add user to group script={{ samba_usermod_command }} -a -G %g %u" --option="delete user script=/usr/sbin/deluser %u" --option="delete group script=/usr/sbin/groupdel %g" --option="delete user from group script=/usr/sbin/deluser %u %g" --option="password hash userPassword schemes = {{ samba_security_options.password_hash_schemes | join(' ') }}" --option="template shell = {{ samba_system_shell }}" --option="template homedir = {{ samba_system_homedir }}" {% endif -%}
-
+      samba-tool domain provision --dns-backend='{{ samba_ad_info['backend_dns'] }}' --realm='{{ samba_ad_info['kerberos_realm'] | upper }}' --domain='{{ samba_ad_info['netbios_domain_name'] | upper }}' --adminpass='{{ samba_ad_info['adminpass'] }}' --machinepass='{{ samba_ad_info['machinepass'] }}' --backend-store='{{ _samba_backend_store }}' --server-role='dc' --use-rfc2307 --host-name='{{ ansible_hostname }}' --host-ip='{{ ansible_default_ipv4.address }}' {% if samba_enhanced_provisioning_enabled | bool -%} --option="dns forwarder={{ samba_ad_info.dns_forwarder }}" --option="rpc server dynamic port range={{ samba_rpc_port_range }}" {% if samba_security_options.require_strong_auth | bool -%} --option="ldap server require strong auth = yes" {% endif -%} --option="add machine script={{ samba_useradd_command }} -N -M -g Domain-Computer -d {{ samba_system_homedir }} -s {{ samba_system_shell }} %u" --option="add user script={{ samba_useradd_command }} %u" --option="add group script={{ samba_groupadd_command }} %g" --option="add user to group script={{ samba_usermod_command }} -a -G %g %u" --option="delete user script=/usr/sbin/deluser %u" --option="delete group script=/usr/sbin/groupdel %g" --option="delete user from group script=/usr/sbin/deluser %u %g" --option="password hash userPassword schemes = {{ samba_security_options.password_hash_schemes | join(' ') }}" --option="template shell = {{ samba_system_shell }}" --option="template homedir = {{ samba_system_homedir }}" {% endif -%}
+    creates: '{{ samba_datadir }}/private/sam.ldb'
   register: samba_ad_created
-  no_log: true
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
   failed_when:
-    - samba_ad_created.rc != 0
-    - '"Domain provisioned OK" not in samba_ad_created.stdout'
+    - samba_ad_created.rc | default(0) != 0
+    - '"Domain provisioned OK" not in samba_ad_created.stdout | default("")'
   when:
     - not samba_ad_created_check['stat']['exists']|bool
     - samba_create_domain_controller is defined
     - samba_create_domain_controller|bool
     - samba_server_role == "active directory domain controller"
     - inventory_hostname == samba_primary_domain_controller
-  changed_when: '"Domain provisioned OK" in samba_ad_created.stdout'
+  changed_when: samba_ad_created.changed | default(false)
   tags:
     - samba
     - samba-ad
     - samba-domain
 # yamllint enable rule:line-length
 
+- name: Create domain | Re-check if AD database exists after provisioning
+  ansible.builtin.stat:
+    path: '{{ samba_datadir }}/private/sam.ldb'
+  register: samba_ad_database_check_after
+  when:
+    - inventory_hostname == samba_primary_domain_controller
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
 - name: Create domain | marking domain as created
-  ansible.builtin.file:
+  ansible.builtin.copy:
+    content: ""
     dest: '{{ samba_statedir }}/.samba_ad_created'
-    state: touch
+    force: false
     mode: '0644'
   become: true
   register: _samba_domain_created
   when:
-    - samba_ad_created['changed']
-    - not samba_ad_created_check['stat']['exists']|bool
     - inventory_hostname == samba_primary_domain_controller
+    - not samba_ad_created_check['stat']['exists']|bool
+    - samba_ad_database_check_after['stat']['exists']|bool
   tags:
     - samba
     - samba-ad
@@ -113,7 +132,10 @@
     _samba_domain_exists: true
   when:
     - inventory_hostname == samba_primary_domain_controller
-    - samba_ad_created_check['stat']['exists']|bool or _samba_domain_created['changed']
+    - >-
+      samba_ad_created_check['stat']['exists']|bool or
+      samba_ad_database_check_after['stat']['exists']|default(false)|bool or
+      (_samba_domain_created is defined and _samba_domain_created['changed'])
   tags:
     - samba
     - samba-ad
@@ -144,13 +166,15 @@
     - samba-ad
     - samba-domain
 
-- name: Create domain | marking domain as created
-  ansible.builtin.file:
+- name: Create domain | marking domain as created for non-primary DCs
+  ansible.builtin.copy:
+    content: ""
     dest: '{{ samba_statedir }}/.samba_ad_created'
-    state: touch
+    force: false
     mode: '0644'
   become: true
   when:
+    - inventory_hostname != samba_primary_domain_controller
     - hostvars[inventory_hostname]['_samba_domain_exists'] | default(false)
     - not samba_ad_created_check['stat']['exists']|bool
   tags:

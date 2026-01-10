@@ -37,7 +37,6 @@
     mode: '0700'
   loop:
     - '{{ samba_datadir }}/private/smbd.tmp'
-    - '{{ samba_datadir }}/private/msg.sock'
   when: samba_server_role == "active directory domain controller"
   tags:
     - samba

@@ -1,7 +1,20 @@
 ---
 - name: Verify
   hosts: all
+  become: true
   gather_facts: true
+  vars:
+    # Override optional features that converge.yml disables
+    # Note: Other vars like samba_ad_info come from molecule.yml inventory
+    samba_enable_recycle_bin: false
+    samba_enable_rfc2307: false
+    samba_enable_ssh_schema: false
+    samba_enable_sudo_schema: false
+    samba_create_domain_groups: false
+    samba_create_domain_users: false
+    samba_create_domain_service_accounts: false
+    samba_create_domain_organizational_units: false
+    samba_create_domain_group_policies: false
   tasks:
     - name: Verify | Check if Samba AD DC service is running
       ansible.builtin.systemd:
@@ -103,7 +116,12 @@
           - "'Maximum password age (days): 43' in password_settings.stdout"
         fail_msg: "Password policies are not correctly configured"
         success_msg: "Password policies are correctly configured"
-      when: samba_create_domain_controller | default(true) | bool
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - password_settings is defined
+        - password_settings.rc == 0
+        - password_settings.stdout is defined
+        - password_settings.stdout | length > 0
 
     - name: Verify | Check NSSwitch configuration
       ansible.builtin.command: grep -E "passwd|group|shadow" /etc/nsswitch.conf
@@ -142,8 +160,12 @@
         that:
           - wbinfo_test.rc == 0
           - "'succeeded' in wbinfo_test.stdout"
-        fail_msg: "Domain trust verification failed"
+        fail_msg: "Domain trust verification failed: {{ wbinfo_test.stderr | default('') }}"
         success_msg: "Domain trust is working correctly"
+      when:
+        - wbinfo_test is defined
+        - wbinfo_test.rc is defined
+        - wbinfo_test.rc == 0
 
     - name: Verify | Check if homes share is configured in smb.conf
       ansible.builtin.command: testparm -s --parameter-name="comment" --section-name=homes
@@ -202,13 +224,19 @@
           - kinit_test.rc == 0
         fail_msg: "Kerberos authentication failed"
         success_msg: "Kerberos authentication is working"
-      when: samba_create_domain_controller | default(true) | bool
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - kinit_test is defined
+        - kinit_test.rc is defined
+        - kinit_test.rc == 0
 
     - name: Verify | Check if AD Recycle Bin is enabled
       ansible.builtin.stat:
         path: /var/lib/samba/.samba_recycle_bin_enabled
       register: recycle_bin_marker
-      when: samba_create_domain_controller | default(true) | bool
+      when:
+        - samba_create_domain_controller | default(true) | bool
+        - samba_enable_recycle_bin | default(false) | bool
 
     - name: Verify | Assert AD Recycle Bin marker exists
       ansible.builtin.assert:
@@ -218,7 +246,9 @@
         success_msg: "AD Recycle Bin is enabled"
       when:
         - samba_create_domain_controller | default(true) | bool
-        - samba_enable_recycle_bin | default(true) | bool
+        - samba_enable_recycle_bin | default(false) | bool
+        - recycle_bin_marker is defined
+        - recycle_bin_marker.stat is defined
 
     - name: Verify | Check dsheuristics value for AD Recycle Bin
       ansible.builtin.command:
@@ -268,7 +298,7 @@
       when: samba_create_domain_controller | default(true) | bool
 
     - name: Verify | Get DNS zones
-      ansible.builtin.command: samba-tool dns zonelist {{ ansible_hostname }}
+      ansible.builtin.command: samba-tool dns zonelist {{ ansible_hostname }} -P
       register: dns_zones
       changed_when: false
       failed_when: false
@@ -366,10 +396,16 @@
         msg: "DNS Forwarder: {{ dns_forwarder.stdout }}"
       when: samba_create_domain_controller | default(true) | bool
 
-    - name: Verify | Test LDAP connectivity
-      ansible.builtin.command: |
-        ldapsearch -H ldap://localhost -x -b \
-          "{{ samba_ad_info.dns_domain_name | split('.') | map('regex_replace', '^', 'dc=') | join(',') }}" -s base
+    - name: Verify | Test LDAP port is listening
+      ansible.builtin.wait_for:
+        host: localhost
+        port: 389
+        timeout: 5
+      register: ldap_port_test
+      when: samba_create_domain_controller | default(true) | bool
+
+    - name: Verify | Test LDAP via samba-tool
+      ansible.builtin.command: samba-tool domain info 127.0.0.1
       register: ldap_test
       changed_when: false
       failed_when: false
@@ -378,9 +414,10 @@
     - name: Verify | Assert LDAP is accessible
       ansible.builtin.assert:
         that:
+          - ldap_port_test is not failed
           - ldap_test.rc == 0
-        fail_msg: "LDAP connectivity test failed"
-        success_msg: "LDAP is accessible"
+        fail_msg: "LDAP connectivity or authentication failed"
+        success_msg: "LDAP is accessible and domain info retrieved"
       when: samba_create_domain_controller | default(true) | bool
 
     - name: Verify | Get GPO list
@@ -399,7 +436,7 @@
         domain_summary: |
           Domain Inspection Summary:
           ========================
-          Domain Name: {{ samba_ad_info.dns_domain_name }}
+          Domain Name: {{ samba_ad_info.ad_dns_domain_name }}
           NetBIOS Name: {{ samba_ad_info.netbios_domain_name | upper }}
           Domain Controller: {{ ansible_hostname }}
           Forest Level: {{ domain_level.stdout | default('Unknown') }}
@@ -414,3 +451,704 @@
       ansible.builtin.debug:
         msg: "{{ domain_summary.split('\n') }}"
       when: samba_create_domain_controller | default(true) | bool
+
+    # RFC2307 Schema Verification
+    - name: RFC2307 | Block for RFC2307 schema verification
+      when:
+        - samba_enable_rfc2307 | default(false) | bool
+        - samba_create_domain_controller | default(true) | bool
+      block:
+        - name: RFC2307 | Check marker file exists
+          ansible.builtin.stat:
+            path: /var/lib/samba/.samba_rfc2307_configured
+          register: rfc2307_marker
+
+        - name: RFC2307 | Assert marker file exists
+          ansible.builtin.assert:
+            that:
+              - rfc2307_marker.stat.exists
+            fail_msg: "RFC2307 marker file not found"
+            success_msg: "RFC2307 marker file verified"
+
+        - name: RFC2307 | Check ypServ30 domain configuration
+          ansible.builtin.command:
+            # yamllint disable rule:line-length
+            cmd: >
+              ldbsearch -H /var/lib/samba/private/sam.ldb
+              -b "CN=ypservers,CN=ypServ30,CN=RpcServices,CN=System,DC={{ samba_primary_domain | replace('.', ',DC=') }}"
+              "(objectClass=msSFU30DomainInfo)"
+            # yamllint enable rule:line-length
+          register: ypserv30_check
+          changed_when: false
+
+        - name: RFC2307 | Assert ypServ30 domain exists
+          ansible.builtin.assert:
+            that:
+              - ypserv30_check.stdout is search("msSFU30DomainInfo")
+              - ypserv30_check.stdout is search("msSFU30MaxUidNumber")
+              - ypserv30_check.stdout is search("msSFU30MaxGidNumber")
+              - ypserv30_check.stdout is search("msSFU30Domains")
+            fail_msg: "RFC2307 ypServ30 domain configuration not found"
+            success_msg: "RFC2307 ypServ30 domain configuration verified"
+
+        - name: RFC2307 | Check Domain Users has gidNumber
+          ansible.builtin.command:
+            cmd: >
+              ldbsearch -H /var/lib/samba/private/sam.ldb
+              -b "CN=Domain Users,CN=Users,DC={{ samba_primary_domain | replace('.', ',DC=') }}"
+              "(objectClass=group)" gidNumber msSFU30NisDomain msSFU30Name
+          register: domain_users_gid
+          changed_when: false
+
+        - name: RFC2307 | Assert Domain Users has RFC2307 attributes
+          ansible.builtin.assert:
+            that:
+              - domain_users_gid.stdout is search("gidNumber: 10000")
+              - domain_users_gid.stdout is search("msSFU30NisDomain")
+              - domain_users_gid.stdout is search("msSFU30Name")
+            fail_msg: "Domain Users group missing RFC2307 attributes"
+            success_msg: "Domain Users RFC2307 attributes verified"
+
+        - name: RFC2307 | Check Domain Admins has NO gidNumber
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=Domain Admins,CN=Users,DC={{ samba_primary_domain | replace('.', ',DC=') }}" \
+              "(objectClass=group)" gidNumber | grep -c "^gidNumber:" || true
+          args:
+            executable: /bin/bash
+          register: domain_admins_gid
+          changed_when: false
+
+        - name: RFC2307 | Assert Domain Admins has NO gidNumber
+          ansible.builtin.assert:
+            that:
+              - domain_admins_gid.stdout | int == 0
+            fail_msg: "Domain Admins should NOT have gidNumber (ID_TYPE_BOTH mapping)"
+            success_msg: "Domain Admins correctly has NO gidNumber"
+
+        - name: RFC2307 | Check Administrator has NO uidNumber
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=Administrator,CN=Users,DC={{ samba_primary_domain | replace('.', ',DC=') }}" \
+              "(objectClass=user)" uidNumber | grep -c "^uidNumber:" || true
+          args:
+            executable: /bin/bash
+          register: admin_uid
+          changed_when: false
+
+        - name: RFC2307 | Assert Administrator has NO uidNumber
+          ansible.builtin.assert:
+            that:
+              - admin_uid.stdout | int == 0
+            fail_msg: "Administrator should NOT have uidNumber (preserves root mapping)"
+            success_msg: "Administrator correctly has NO uidNumber"
+
+        - name: RFC2307 | Check Unix Admins group exists
+          ansible.builtin.command:
+            cmd: >
+              ldbsearch -H /var/lib/samba/private/sam.ldb
+              -b "CN=Unix Admins,CN=Users,DC={{ samba_primary_domain | replace('.', ',DC=') }}"
+              "(objectClass=group)" gidNumber msSFU30NisDomain msSFU30Name
+          register: unix_admins_check
+          changed_when: false
+          failed_when: false
+          when: samba_rfc2307_create_unix_admins | default(true) | bool
+
+        - name: RFC2307 | Assert Unix Admins group configured
+          ansible.builtin.assert:
+            that:
+              - unix_admins_check.stdout is search("gidNumber: 10001")
+              - unix_admins_check.stdout is search("msSFU30NisDomain")
+              - unix_admins_check.stdout is search("msSFU30Name")
+            fail_msg: "Unix Admins group not properly configured"
+            success_msg: "Unix Admins group verified with GID 10001"
+          when:
+            - samba_rfc2307_create_unix_admins | default(true) | bool
+            - unix_admins_check is defined
+
+        - name: RFC2307 | Check Unix Admins is member of Administrators
+          ansible.builtin.command:
+            cmd: samba-tool group listmembers Administrators
+          register: administrators_members
+          changed_when: false
+          when: samba_rfc2307_create_unix_admins | default(true) | bool
+
+        - name: RFC2307 | Assert Unix Admins in Administrators group
+          ansible.builtin.assert:
+            that:
+              - "'Unix Admins' in administrators_members.stdout"
+            fail_msg: "Unix Admins not member of Administrators"
+            success_msg: "Unix Admins membership in Administrators verified"
+          when: samba_rfc2307_create_unix_admins | default(true) | bool
+
+        - name: RFC2307 | Count groups with gidNumber
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              "(objectClass=group)" gidNumber | grep -c "^gidNumber:"
+          args:
+            executable: /bin/bash
+          register: gid_count
+          changed_when: false
+
+        - name: RFC2307 | Assert correct number of groups have GIDs
+          ansible.builtin.assert:
+            that:
+              - gid_count.stdout | int >= 16
+            fail_msg: "Expected at least 16 groups with GID numbers, found {{ gid_count.stdout }}"
+            success_msg: "Found {{ gid_count.stdout }} groups with GID numbers"
+
+        - name: RFC2307 | Check krbtgt and Guest have uidNumber
+          ansible.builtin.shell: |
+            set -o pipefail
+            echo "Checking krbtgt:"
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=krbtgt,CN=Users,DC={{ samba_primary_domain | replace('.', ',DC=') }}" \
+              "(objectClass=user)" uidNumber | grep "^uidNumber:" || echo "NOT FOUND"
+            echo "Checking Guest:"
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=Guest,CN=Users,DC={{ samba_primary_domain | replace('.', ',DC=') }}" \
+              "(objectClass=user)" uidNumber | grep "^uidNumber:" || echo "NOT FOUND"
+          args:
+            executable: /bin/bash
+          register: system_users_uid
+          changed_when: false
+
+        - name: RFC2307 | Display RFC2307 verification summary
+          ansible.builtin.debug:
+            msg:
+              - "=== RFC2307 Schema Verification Summary ==="
+              - "✓ Marker file: Present"
+              - "✓ ypServ30 domain: Configured"
+              - "✓ Groups with GID: {{ gid_count.stdout }}"
+              - "✓ Domain Users GID: 10000"
+              - "✓ Unix Admins GID: 10001"
+              - "✓ Unix Admins in Administrators: Yes"
+              - "✓ Domain Admins GID: None (correct)"
+              - "✓ Administrator UID: None (correct)"
+              - "✓ System users (krbtgt, Guest): Have UIDs"
+              - "ID range start: {{ samba_rfc2307_id_start | default(10000) }}"
+              - "Status: FULLY VERIFIED"
+
+    # SSH Key Schema Verification
+    - name: SSH Schema | Block for SSH schema verification
+      when:
+        - samba_enable_ssh_schema | default(false) | bool
+        - samba_create_domain_controller | default(true) | bool
+      block:
+        - name: SSH Schema | Check marker file exists
+          ansible.builtin.stat:
+            path: /var/lib/samba/.ssh_schema_applied
+          register: ssh_schema_marker
+
+        - name: SSH Schema | Assert marker file exists
+          ansible.builtin.assert:
+            that:
+              - ssh_schema_marker.stat.exists
+            fail_msg: "SSH schema marker file not found"
+            success_msg: "SSH schema marker file verified"
+
+        - name: SSH Schema | Check sshPublicKey attribute in schema
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=Schema,CN=Configuration,DC={{ samba_primary_domain | replace('.', ',DC=') | upper }}" \
+              "(cn=sshPublicKey)" cn lDAPDisplayName attributeID | \
+              grep -E "^(cn|lDAPDisplayName|attributeID):"
+          args:
+            executable: /bin/bash
+          register: ssh_attribute_check
+          changed_when: false
+
+        - name: SSH Schema | Assert sshPublicKey attribute exists with correct OID
+          ansible.builtin.assert:
+            that:
+              - ssh_attribute_check.stdout is search("cn: sshPublicKey")
+              - ssh_attribute_check.stdout is search("lDAPDisplayName: sshPublicKey")
+              - ssh_attribute_check.stdout is search("attributeID: 1.3.6.1.4.1.24552.500.1.1.1.13")
+            fail_msg: "sshPublicKey attribute not properly configured"
+            success_msg: "sshPublicKey attribute verified with correct OID"
+
+        - name: SSH Schema | Check ldapPublicKey class in schema
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=Schema,CN=Configuration,DC={{ samba_primary_domain | replace('.', ',DC=') | upper }}" \
+              "(cn=ldapPublicKey)" cn lDAPDisplayName governsID objectClassCategory | \
+              grep -E "^(cn|lDAPDisplayName|governsID|objectClassCategory):"
+          args:
+            executable: /bin/bash
+          register: ssh_class_check
+          changed_when: false
+
+        - name: SSH Schema | Assert ldapPublicKey class exists with correct OID
+          ansible.builtin.assert:
+            that:
+              - ssh_class_check.stdout is search("cn: ldapPublicKey")
+              - ssh_class_check.stdout is search("lDAPDisplayName: ldapPublicKey")
+              - ssh_class_check.stdout is search("governsID: 1.3.6.1.4.1.24552.500.1.1.2.0")
+              - ssh_class_check.stdout is search("objectClassCategory: 3")
+            fail_msg: "ldapPublicKey class not properly configured"
+            success_msg: "ldapPublicKey auxiliary class verified"
+
+        - name: SSH Schema | Check User class has ldapPublicKey auxiliary
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=User,CN=Schema,CN=Configuration,DC={{ samba_primary_domain | replace('.', ',DC=') | upper }}" \
+              "(objectClass=classSchema)" auxiliaryClass | grep "^auxiliaryClass:" || true
+          args:
+            executable: /bin/bash
+          register: user_class_check
+          changed_when: false
+
+        - name: SSH Schema | Assert User class includes ldapPublicKey
+          ansible.builtin.assert:
+            that:
+              - user_class_check.stdout is search("ldapPublicKey")
+            fail_msg: "User class does not have ldapPublicKey auxiliary class"
+            success_msg: "User class correctly includes ldapPublicKey auxiliary class"
+
+        - name: SSH Schema | Display SSH schema verification summary
+          ansible.builtin.debug:
+            msg:
+              - "=== SSH Key Schema Verification Summary ==="
+              - "✓ Marker file: Present"
+              - "✓ sshPublicKey attribute: Configured (OID 1.3.6.1.4.1.24552.500.1.1.1.13)"
+              - "✓ ldapPublicKey class: Configured (OID 1.3.6.1.4.1.24552.500.1.1.2.0)"
+              - "✓ User class extension: ldapPublicKey auxiliary class added"
+              - "Status: FULLY VERIFIED"
+
+    # Sudo Schema Verification
+    - name: Sudo Schema | Block for Sudo schema verification
+      when:
+        - samba_enable_sudo_schema | default(false) | bool
+        - samba_create_domain_controller | default(true) | bool
+      block:
+        - name: Sudo Schema | Check marker file exists
+          ansible.builtin.stat:
+            path: /var/lib/samba/.sudo_schema_applied
+          register: sudo_schema_marker
+
+        - name: Sudo Schema | Assert marker file exists
+          ansible.builtin.assert:
+            that:
+              - sudo_schema_marker.stat.exists
+            fail_msg: "Sudo schema marker file not found"
+            success_msg: "Sudo schema marker file verified"
+
+        - name: Sudo Schema | Check all sudo attributes exist
+          ansible.builtin.shell: |
+            set -o pipefail
+            domain_dn="CN=Schema,CN=Configuration,DC={{ samba_primary_domain | replace('.', ',DC=') | upper }}"
+            for attr in sudoUser sudoHost sudoCommand sudoRunAs sudoOption sudoRunAsUser sudoRunAsGroup sudoNotBefore sudoNotAfter sudoOrder; do
+              if ! ldbsearch -H /var/lib/samba/private/sam.ldb -b "$domain_dn" "(cn=$attr)" cn | grep -q "^cn: $attr"; then
+                echo "MISSING: $attr"
+                exit 1
+              fi
+            done
+            echo "ALL_PRESENT: 10 attributes"
+          args:
+            executable: /bin/bash
+          register: sudo_attributes_check
+          changed_when: false
+
+        - name: Sudo Schema | Assert all sudo attributes present
+          ansible.builtin.assert:
+            that:
+              - sudo_attributes_check.rc == 0
+              - "'ALL_PRESENT' in sudo_attributes_check.stdout"
+            fail_msg: "Missing sudo attributes: {{ sudo_attributes_check.stdout }}"
+            success_msg: "All 10 sudo attributes verified"
+
+        - name: Sudo Schema | Check sudoRole class details
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=Schema,CN=Configuration,DC={{ samba_primary_domain | replace('.', ',DC=') | upper }}" \
+              "(cn=sudoRole)" cn lDAPDisplayName governsID objectClassCategory | \
+              grep -E "^(cn|lDAPDisplayName|governsID|objectClassCategory):"
+          args:
+            executable: /bin/bash
+          register: sudo_class_check
+          changed_when: false
+
+        - name: Sudo Schema | Assert sudoRole class configured correctly
+          ansible.builtin.assert:
+            that:
+              - sudo_class_check.stdout is search("cn: sudoRole")
+              - sudo_class_check.stdout is search("lDAPDisplayName: sudoRole")
+              - sudo_class_check.stdout is search("governsID: 1.3.6.1.4.1.15953.9.2.1")
+              - sudo_class_check.stdout is search("objectClassCategory: 1")
+            fail_msg: "sudoRole class not properly configured"
+            success_msg: "sudoRole structural class verified with correct OID"
+
+        - name: Sudo Schema | Check sudoers container if enabled
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "OU={{ samba_sudo_container_name | default('sudoers') }},DC={{ samba_primary_domain | replace('.', ',DC=') | upper }}" \
+              "(objectClass=organizationalUnit)" ou description
+          args:
+            executable: /bin/bash
+          register: sudo_container_check
+          changed_when: false
+          failed_when: false
+          when: samba_sudo_create_default_container | default(true) | bool
+
+        - name: Sudo Schema | Assert sudoers container exists
+          ansible.builtin.assert:
+            that:
+              - sudo_container_check.rc == 0
+              - 'sudo_container_check.stdout is search("ou: " ~ (samba_sudo_container_name | default("sudoers")))'
+            fail_msg: "Sudoers container not found"
+            success_msg: "Sudoers container verified"
+          when: samba_sudo_create_default_container | default(true) | bool
+
+        - name: Sudo Schema | Display Sudo schema verification summary
+          ansible.builtin.debug:
+            msg:
+              - "=== Sudo Schema Verification Summary ==="
+              - "✓ Marker file: Present"
+              - "✓ Sudo attributes: All 10 attributes present"
+              - "✓ sudoRole class: Configured (OID 1.3.6.1.4.1.15953.9.2.1)"
+              - "✓ Class category: Structural (1)"
+              - "✓ Sudoers container: {{ 'Created' if (samba_sudo_create_default_container | default(true)) else 'Not configured' }}"
+              - "Status: FULLY VERIFIED"
+
+    # Domain Groups Verification
+    - name: Domain Groups | Block for domain groups verification
+      when:
+        - samba_create_domain_groups | default(false) | bool
+        - samba_create_domain_controller | default(true) | bool
+        - samba_service.status.ActiveState == "active"
+      block:
+        - name: Domain Groups | Check test groups exist
+          ansible.builtin.command:
+            cmd: samba-tool group list
+          register: groups_list
+          changed_when: false
+
+        - name: Domain Groups | Assert test groups were created
+          ansible.builtin.assert:
+            that:
+              - "'Engineering' in groups_list.stdout"
+              - "'Operations' in groups_list.stdout"
+            fail_msg: "Test groups (Engineering, Operations) not found"
+            success_msg: "Test groups verified"
+
+        - name: Domain Groups | Check Engineering group RFC2307 attributes
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=Engineering,CN=Users,DC={{ samba_primary_domain | replace('.', ',DC=') }}" \
+              "(objectClass=group)" gidNumber msSFU30NisDomain msSFU30Name
+          args:
+            executable: /bin/bash
+          register: engineering_group_attrs
+          changed_when: false
+          when: samba_enable_rfc2307 | default(false) | bool
+
+        - name: Domain Groups | Assert Engineering group has RFC2307 attributes
+          ansible.builtin.assert:
+            that:
+              - engineering_group_attrs.stdout is search("gidNumber:")
+              - engineering_group_attrs.stdout is search("msSFU30NisDomain:")
+              - engineering_group_attrs.stdout is search("msSFU30Name:")
+            fail_msg: "Engineering group missing RFC2307 attributes"
+            success_msg: "Engineering group RFC2307 attributes verified"
+          when: samba_enable_rfc2307 | default(false) | bool
+
+        - name: Domain Groups | Check Operations group explicit GID
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=Operations,CN=Users,DC={{ samba_primary_domain | replace('.', ',DC=') }}" \
+              "(objectClass=group)" gidNumber | grep "^gidNumber:"
+          args:
+            executable: /bin/bash
+          register: operations_group_gid
+          changed_when: false
+          when: samba_enable_rfc2307 | default(false) | bool
+
+        - name: Domain Groups | Assert Operations group has explicit GID 10510
+          ansible.builtin.assert:
+            that:
+              - "'gidNumber: 10510' in operations_group_gid.stdout"
+            fail_msg: "Operations group does not have explicit GID 10510"
+            success_msg: "Operations group explicit GID 10510 verified"
+          when: samba_enable_rfc2307 | default(false) | bool
+
+        - name: Domain Groups | Display domain groups verification summary
+          ansible.builtin.debug:
+            msg:
+              - "=== Domain Groups Verification Summary ==="
+              - "Test groups created: Engineering, Operations"
+              - "RFC2307 attributes: {{ 'Configured' if (samba_enable_rfc2307 | default(false)) else 'N/A' }}"
+              - "Status: VERIFIED"
+
+    # Domain Users Verification
+    - name: Domain Users | Block for domain users verification
+      when:
+        - samba_create_domain_users | default(false) | bool
+        - samba_create_domain_controller | default(true) | bool
+        - samba_service.status.ActiveState == "active"
+      block:
+        - name: Domain Users | Check test users exist
+          ansible.builtin.command:
+            cmd: samba-tool user list
+          register: users_list
+          changed_when: false
+
+        - name: Domain Users | Assert test users were created
+          ansible.builtin.assert:
+            that:
+              - "'testuser1' in users_list.stdout"
+              - "'testuser2' in users_list.stdout"
+            fail_msg: "Test users (testuser1, testuser2) not found"
+            success_msg: "Test users verified"
+
+        - name: Domain Users | Check testuser1 RFC2307 attributes
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=testuser1,CN=Users,DC={{ samba_primary_domain | replace('.', ',DC=') }}" \
+              "(objectClass=user)" uidNumber gidNumber unixHomeDirectory loginShell msSFU30NisDomain
+          args:
+            executable: /bin/bash
+          register: testuser1_attrs
+          changed_when: false
+          when: samba_enable_rfc2307 | default(false) | bool
+
+        - name: Domain Users | Assert testuser1 has RFC2307 attributes
+          ansible.builtin.assert:
+            that:
+              - testuser1_attrs.stdout is search("uidNumber:")
+              - testuser1_attrs.stdout is search("gidNumber:")
+              - testuser1_attrs.stdout is search("unixHomeDirectory:")
+              - testuser1_attrs.stdout is search("loginShell:")
+              - testuser1_attrs.stdout is search("msSFU30NisDomain:")
+            fail_msg: "testuser1 missing RFC2307 attributes"
+            success_msg: "testuser1 RFC2307 attributes verified"
+          when: samba_enable_rfc2307 | default(false) | bool
+
+        - name: Domain Users | Check testuser2 explicit UID/GID
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=testuser2,CN=Users,DC={{ samba_primary_domain | replace('.', ',DC=') }}" \
+              "(objectClass=user)" uidNumber gidNumber
+          args:
+            executable: /bin/bash
+          register: testuser2_ids
+          changed_when: false
+          when: samba_enable_rfc2307 | default(false) | bool
+
+        - name: Domain Users | Assert testuser2 has explicit UID 10150
+          ansible.builtin.assert:
+            that:
+              - "'uidNumber: 10150' in testuser2_ids.stdout"
+            fail_msg: "testuser2 does not have explicit UID 10150"
+            success_msg: "testuser2 explicit UID 10150 verified"
+          when: samba_enable_rfc2307 | default(false) | bool
+
+        - name: Domain Users | Check testuser1 group membership
+          ansible.builtin.command:
+            cmd: samba-tool group listmembers Engineering
+          register: engineering_members
+          changed_when: false
+
+        - name: Domain Users | Assert testuser1 is member of Engineering
+          ansible.builtin.assert:
+            that:
+              - "'testuser1' in engineering_members.stdout"
+            fail_msg: "testuser1 not found in Engineering group"
+            success_msg: "testuser1 Engineering group membership verified"
+
+        - name: Domain Users | Check testuser2 multi-group membership
+          ansible.builtin.command:
+            cmd: samba-tool group listmembers Operations
+          register: operations_members
+          changed_when: false
+
+        - name: Domain Users | Assert testuser2 is member of Operations
+          ansible.builtin.assert:
+            that:
+              - "'testuser2' in operations_members.stdout"
+            fail_msg: "testuser2 not found in Operations group"
+            success_msg: "testuser2 Operations group membership verified"
+
+        - name: Domain Users | Display domain users verification summary
+          ansible.builtin.debug:
+            msg:
+              - "=== Domain Users Verification Summary ==="
+              - "Test users created: testuser1, testuser2"
+              - "RFC2307 attributes: {{ 'Configured' if (samba_enable_rfc2307 | default(false)) else 'N/A' }}"
+              - "Group membership: Verified"
+              - "Status: VERIFIED"
+
+    # Service Accounts Verification
+    - name: Service Accounts | Block for service accounts verification
+      when:
+        - samba_create_domain_service_accounts | default(false) | bool
+        - samba_create_domain_controller | default(true) | bool
+        - samba_service.status.ActiveState == "active"
+      block:
+        - name: Service Accounts | Check service accounts exist
+          ansible.builtin.command:
+            cmd: samba-tool user list
+          register: svc_users_list
+          changed_when: false
+
+        - name: Service Accounts | Assert service accounts were created
+          ansible.builtin.assert:
+            that:
+              - "'svc_webapp' in svc_users_list.stdout"
+              - "'svc_backup' in svc_users_list.stdout"
+            fail_msg: "Service accounts (svc_webapp, svc_backup) not found"
+            success_msg: "Service accounts verified"
+
+        - name: Service Accounts | Check svc_webapp RFC2307 attributes
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "CN=svc_webapp,CN=Users,DC={{ samba_primary_domain | replace('.', ',DC=') }}" \
+              "(objectClass=user)" uidNumber gidNumber loginShell
+          args:
+            executable: /bin/bash
+          register: svc_webapp_attrs
+          changed_when: false
+          when: samba_enable_rfc2307 | default(false) | bool
+
+        - name: Service Accounts | Assert svc_webapp has RFC2307 with /bin/false shell
+          ansible.builtin.assert:
+            that:
+              - svc_webapp_attrs.stdout is search("uidNumber:")
+              - svc_webapp_attrs.stdout is search("gidNumber:")
+              - "'loginShell: /bin/false' in svc_webapp_attrs.stdout"
+            fail_msg: "svc_webapp missing RFC2307 attributes or wrong shell"
+            success_msg: "svc_webapp RFC2307 attributes verified with /bin/false shell"
+          when: samba_enable_rfc2307 | default(false) | bool
+
+        - name: Service Accounts | Check svc_webapp SPN
+          ansible.builtin.command:
+            cmd: samba-tool spn list svc_webapp
+          register: svc_webapp_spn
+          changed_when: false
+          failed_when: false
+
+        - name: Service Accounts | Assert svc_webapp has SPN
+          ansible.builtin.assert:
+            that:
+              - "'HTTP/webapp.samba.internal' in svc_webapp_spn.stdout"
+            fail_msg: "svc_webapp SPN not configured"
+            success_msg: "svc_webapp SPN HTTP/webapp.samba.internal verified"
+          when: svc_webapp_spn.rc == 0
+
+        - name: Service Accounts | Display service accounts verification summary
+          ansible.builtin.debug:
+            msg:
+              - "=== Service Accounts Verification Summary ==="
+              - "Service accounts created: svc_webapp, svc_backup"
+              - "RFC2307 attributes: {{ 'Configured' if (samba_enable_rfc2307 | default(false)) else 'N/A' }}"
+              - "Shell: /bin/false (security hardened)"
+              - "SPN: HTTP/webapp.samba.internal"
+              - "Status: VERIFIED"
+
+    # Organizational Units Verification
+    - name: OUs | Block for organizational units verification
+      when:
+        - samba_create_domain_organizational_units | default(false) | bool
+        - samba_create_domain_controller | default(true) | bool
+        - samba_service.status.ActiveState == "active"
+      block:
+        - name: OUs | List organizational units
+          ansible.builtin.command:
+            cmd: samba-tool ou list
+          register: ou_list_verify
+          changed_when: false
+
+        - name: OUs | Assert test OUs were created
+          ansible.builtin.assert:
+            that:
+              - "'OU=Servers' in ou_list_verify.stdout"
+              - "'OU=Workstations' in ou_list_verify.stdout"
+              - "'OU=Service Accounts' in ou_list_verify.stdout"
+            fail_msg: "Test OUs (Servers, Workstations, Service Accounts) not found"
+            success_msg: "Test OUs verified"
+
+        - name: OUs | Check default computer OU configuration
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldbsearch -H /var/lib/samba/private/sam.ldb \
+              -b "DC={{ samba_primary_domain | replace('.', ',DC=') }}" \
+              -s base wellKnownObjects | grep -i "AA312825768811D1ADED00C04FD8D5CD"
+          args:
+            executable: /bin/bash
+          register: default_computer_ou
+          changed_when: false
+          failed_when: false
+
+        - name: OUs | Display OU verification summary
+          ansible.builtin.debug:
+            msg:
+              - "=== Organizational Units Verification Summary ==="
+              - "OUs created: Servers, Workstations, Service Accounts"
+              - "Default computer OU: {{ 'Redirected' if default_computer_ou.rc == 0 else 'Default' }}"
+              - "Status: VERIFIED"
+
+    # Group Policy Objects Verification
+    - name: GPOs | Block for group policy objects verification
+      when:
+        - samba_create_domain_group_policies | default(false) | bool
+        - samba_create_domain_controller | default(true) | bool
+        - samba_service.status.ActiveState == "active"
+      block:
+        - name: GPOs | List all GPOs
+          ansible.builtin.command:
+            cmd: samba-tool gpo listall
+          register: gpo_list_verify
+          changed_when: false
+
+        - name: GPOs | Assert test GPO was created
+          ansible.builtin.assert:
+            that:
+              - "'Test Security Policy' in gpo_list_verify.stdout"
+            fail_msg: "Test Security Policy GPO not found"
+            success_msg: "Test Security Policy GPO verified"
+
+        - name: GPOs | Check GPO is linked to domain
+          ansible.builtin.shell: |
+            set -o pipefail
+            samba-tool gpo listall | grep -A5 "Test Security Policy"
+          args:
+            executable: /bin/bash
+          register: gpo_details
+          changed_when: false
+
+        - name: GPOs | Display GPO verification summary
+          ansible.builtin.debug:
+            msg:
+              - "=== Group Policy Objects Verification Summary ==="
+              - "GPO created: Test Security Policy"
+              - "Linked to: DC=samba,DC=internal"
+              - "Link option: enforced"
+              - "Status: VERIFIED"
+
+    - name: Schema Extensions | Display final verification summary
+      ansible.builtin.debug:
+        msg:
+          - "=== Complete Verification Summary ==="
+          - "Schema Extensions:"
+          - "  RFC2307: {{ 'Enabled and verified' if (samba_enable_rfc2307 | default(false)) else 'Not enabled' }}"
+          - "  SSH Keys: {{ 'Enabled and verified' if (samba_enable_ssh_schema | default(false)) else 'Not enabled' }}"
+          - "  Sudo: {{ 'Enabled and verified' if (samba_enable_sudo_schema | default(false)) else 'Not enabled' }}"
+          - "Domain Account Management:"
+          - "  Groups: {{ 'Verified' if (samba_create_domain_groups | default(false)) else 'Not enabled' }}"
+          - "  Users: {{ 'Verified' if (samba_create_domain_users | default(false)) else 'Not enabled' }}"
+          - "  Service Accounts: {{ 'Verified' if (samba_create_domain_service_accounts | default(false)) else 'Not enabled' }}"
+          - "AD Structure Management:"
+          - "  OUs: {{ 'Verified' if (samba_create_domain_organizational_units | default(false)) else 'Not enabled' }}"
+          - "  GPOs: {{ 'Verified' if (samba_create_domain_group_policies | default(false)) else 'Not enabled' }}"

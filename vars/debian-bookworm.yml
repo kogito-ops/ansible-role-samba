@@ -21,4 +21,5 @@ samba_db_packages:
 
 samba_tool_packages:
   - ldap-utils
+  - ldp-tools
   - smbldap-tools

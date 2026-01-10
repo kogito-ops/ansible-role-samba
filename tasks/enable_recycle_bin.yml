@@ -1,4 +1,18 @@
 ---
+- name: Recycle Bin | Wait for Samba service to be available
+  become: true
+  ansible.builtin.wait_for:
+    port: 389
+    host: localhost
+    timeout: 60
+    delay: 2
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  tags:
+    - samba
+    - samba-ad
+    - samba-recycle-bin
+
 - name: Recycle Bin | Check if recycle bin is already enabled
   become: true
   ansible.builtin.stat:
@@ -11,24 +25,55 @@
     - samba-ad
     - samba-recycle-bin
 
+- name: Recycle Bin | Get current dsheuristics value
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool forest directory_service show -H ldap://localhost
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  register: _samba_dsheuristics_current
+  changed_when: false
+  failed_when: false
+  tags:
+    - samba_recycle_bin
+
+- name: Recycle Bin | Check if dsheuristics needs updating
+  ansible.builtin.set_fact:
+    _samba_dsheuristics_needs_update: >-
+      {{
+        (_samba_dsheuristics_current.stdout is defined) and
+        (samba_dsheuristics_value not in _samba_dsheuristics_current.stdout)
+      }}
+  delegate_to: '{{ samba_primary_domain_controller }}'
+  run_once: true
+  tags:
+    - samba_recycle_bin
+
 - name: Recycle Bin | Enable AD Recycle Bin feature
   become: true
   ansible.builtin.command:
+    # yamllint disable rule:line-length
     cmd: >
-      samba-tool forest directory_service dsheuristics {{ samba_dsheuristics_value }}
-      -H ldap://localhost
-      -U {{ samba_recycle_bin_admin }}%{{ samba_ad_info.adminpass }}
+      samba-tool forest directory_service dsheuristics {{ samba_dsheuristics_value }} -H ldap://localhost -U {{ samba_recycle_bin_admin }}%{{ samba_ad_info.adminpass }}
 
+    # yamllint enable rule:line-length
   delegate_to: '{{ samba_primary_domain_controller }}'
   run_once: true
-  no_log: true
+  no_log: '{{ samba_domain_groups_no_log | bool }}'
   register: _samba_recycle_bin
-  when: not _samba_recycle_bin_check.stat.exists
+  when:
+    - not _samba_recycle_bin_check.stat.exists
+    - _samba_dsheuristics_needs_update | default(true)
   changed_when: _samba_recycle_bin.rc == 0
+  failed_when:
+    - _samba_recycle_bin.rc != 0
+    - '"already exists" not in _samba_recycle_bin.stderr | default("")'
+    - '"already set" not in _samba_recycle_bin.stderr | default("")'
   tags:
     - samba
     - samba-ad
     - samba-recycle-bin
+
 - name: Recycle Bin | Mark recycle bin as enabled
   become: true
   ansible.builtin.file:
@@ -38,8 +83,10 @@
   delegate_to: '{{ samba_primary_domain_controller }}'
   run_once: true
   when:
-    - _samba_recycle_bin is changed
-    - _samba_recycle_bin.rc == 0
+    - _samba_recycle_bin_check.stat.exists or
+      (_samba_recycle_bin is defined and
+       (_samba_recycle_bin is changed or _samba_recycle_bin.rc == 0)) or
+      not (_samba_dsheuristics_needs_update | default(true))
   tags:
     - samba
     - samba-ad

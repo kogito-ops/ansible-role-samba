@@ -1,0 +1,307 @@
+---
+- name: Domain GPOs | Generate list of existing Group Policy Objects
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool gpo listall
+  register: _samba_domain_gpos_raw
+  changed_when: false
+  failed_when: false
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Parse existing GPO display names
+  ansible.builtin.set_fact:
+    _samba_domain_gpos_list: >-
+      {{
+        _samba_domain_gpos_raw.stdout
+        | regex_findall('display name : (.+)')
+      }}
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Ensure Group Policy Objects exist
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool gpo create "{{ item['name'] }}" -U Administrator --password="{{ samba_ad_info.adminpass }}"
+  register: domain_gpos_create
+  changed_when: '"Created GPO" in domain_gpos_create.stdout'
+  failed_when:
+    - domain_gpos_create.rc != 0
+    - '"already exists" not in domain_gpos_create.stderr'
+  loop: '{{ samba_domain_group_policies }}'
+  when:
+    - samba_domain_group_policies | length > 0
+    - item['name'] not in _samba_domain_gpos_list
+  no_log: '{{ samba_domain_group_policies_no_log | default(true) | bool }}'
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Get GPO GUIDs for policy file deployment
+  become: true
+  ansible.builtin.shell:
+    cmd: |
+      samba-tool gpo listall | grep -B1 "display name : {{ item['name'] }}" | grep "GPO" | awk '{print $3}'
+  register: _samba_domain_gpo_guids
+  changed_when: false
+  loop: '{{ samba_domain_group_policies }}'
+  when:
+    - samba_domain_group_policies | length > 0
+    - item['policy_files'] is defined
+  no_log: '{{ samba_domain_group_policies_no_log | default(false) | bool }}'
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Ensure GPO policy file directories exist
+  become: true
+  ansible.builtin.file:
+    path: "/var/lib/samba/sysvol/{{ samba_ad_info.ad_dns_domain_name }}/Policies/{{ item.0.stdout }}/{{ item.1.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: "{{ _samba_domain_gpo_guids.results | default([]) | subelements('item.policy_files', skip_missing=True) }}"
+  when:
+    - item.0.stdout is defined
+    - item.0.stdout | length > 0
+    - item.1.type is defined
+    - item.1.type == 'directory'
+  no_log: '{{ samba_domain_group_policies_no_log | default(false) | bool }}'
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Deploy GPO policy files from source
+  become: true
+  ansible.builtin.copy:
+    src: "{{ item.1.src }}"
+    dest: "/var/lib/samba/sysvol/{{ samba_ad_info.ad_dns_domain_name }}/Policies/{{ item.0.stdout }}/{{ item.1.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.1.mode | default('0644') }}"
+  loop: "{{ _samba_domain_gpo_guids.results | default([]) | subelements('item.policy_files', skip_missing=True) }}"
+  when:
+    - item.0.stdout is defined
+    - item.0.stdout | length > 0
+    - item.1.type is defined
+    - item.1.type == 'file'
+    - item.1.src is defined
+  no_log: '{{ samba_domain_group_policies_no_log | default(false) | bool }}'
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Deploy GPO policy files from template
+  become: true
+  ansible.builtin.template:
+    src: "{{ item.1.template }}"
+    dest: "/var/lib/samba/sysvol/{{ samba_ad_info.ad_dns_domain_name }}/Policies/{{ item.0.stdout }}/{{ item.1.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.1.mode | default('0644') }}"
+  loop: "{{ _samba_domain_gpo_guids.results | default([]) | subelements('item.policy_files', skip_missing=True) }}"
+  when:
+    - item.0.stdout is defined
+    - item.0.stdout | length > 0
+    - item.1.type is defined
+    - item.1.type == 'template'
+    - item.1.template is defined
+  no_log: '{{ samba_domain_group_policies_no_log | default(false) | bool }}'
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Deploy GPO policy content inline
+  become: true
+  ansible.builtin.copy:
+    content: "{{ item.1.content }}"
+    dest: "/var/lib/samba/sysvol/{{ samba_ad_info.ad_dns_domain_name }}/Policies/{{ item.0.stdout }}/{{ item.1.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.1.mode | default('0644') }}"
+  loop: "{{ _samba_domain_gpo_guids.results | default([]) | subelements('item.policy_files', skip_missing=True) }}"
+  when:
+    - item.0.stdout is defined
+    - item.0.stdout | length > 0
+    - item.1.type is defined
+    - item.1.type == 'content'
+    - item.1.content is defined
+  no_log: '{{ samba_domain_group_policies_no_log | default(false) | bool }}'
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Get Domain Computers group SID
+  become: true
+  ansible.builtin.shell: |
+    wbinfo --name-to-sid='Domain Computers' | awk '{print $1}'
+  register: _samba_domain_computers_sid
+  changed_when: false
+  failed_when: _samba_domain_computers_sid.rc != 0
+  when:
+    - samba_domain_group_policies | length > 0
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Debug Domain Computers SID
+  ansible.builtin.debug:
+    msg: "Domain Computers SID: {{ _samba_domain_computers_sid.stdout | default('NOT SET') }}"
+  when:
+    - samba_domain_group_policies | length > 0
+    - _samba_domain_computers_sid is defined
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Set Windows ACLs on GPO directories with Domain Computers read access
+  # This task sets Windows Security Descriptors (SDDL) on GPO directories to ensure
+  # Windows clients can read and apply the policies. Without this, clients filter GPOs as "Empty".
+  # CRITICAL: In Samba AD, computer accounts are NOT members of "Authenticated Users" group,
+  # so Domain Computers group MUST be explicitly granted read permissions.
+  # SDDL breakdown:
+  #   O:DAG:DAD:PAI - Owner: Domain Admins, Group: Domain Admins, Protected, Auto-Inherit
+  #   (A;OICI;0x001f01ff;;;DA) - Domain Admins: Full Control (inherited)
+  #   (A;OICI;0x001f01ff;;;EA) - Enterprise Admins: Full Control (inherited)
+  #   (A;OICIIO;0x001f01ff;;;CO) - Creator Owner: Full Control (inherited, inherit-only)
+  #   (A;OICI;0x001f01ff;;;BA) - Builtin Administrators: Full Control (inherited)
+  #   (A;OICI;0x001f01ff;;;SY) - SYSTEM: Full Control (inherited)
+  #   (A;OICI;0x001200a9;;;AU) - Authenticated Users: Read & Execute (inherited) - for user GPOs
+  #   (A;OICI;0x001200a9;;;[DC-SID]) - Domain Computers: Read & Execute (inherited) - REQUIRED FOR COMPUTER GPOs
+  #   (A;OICI;0x001200a9;;;ED) - Enterprise Domain Controllers: Read & Execute (inherited)
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      samba-tool ntacl set
+      "O:DAG:DAD:PAI(A;OICI;0x001f01ff;;;DA)(A;OICI;0x001f01ff;;;EA)(A;OICIIO;0x001f01ff;;;CO)(A;OICI;0x001f01ff;;;BA)(A;OICI;0x001f01ff;;;SY)(A;OICI;0x001200a9;;;AU)(A;OICI;0x001200a9;;;{{ _samba_domain_computers_sid.stdout | trim }})(A;OICI;0x001200a9;;;ED)"
+      /var/lib/samba/sysvol/{{ samba_ad_info.ad_dns_domain_name }}/Policies/{{ item.stdout }}
+      --recursive
+  register: _samba_domain_gpo_acl_dirs
+  changed_when: _samba_domain_gpo_acl_dirs.rc == 0
+  failed_when: _samba_domain_gpo_acl_dirs.rc != 0
+  loop: "{{ _samba_domain_gpo_guids.results | default([]) }}"
+  when:
+    - item.stdout is defined
+    - item.stdout | length > 0
+    - item.item.policy_files is defined
+    - item.item.policy_files | length > 0
+    - _samba_domain_computers_sid.stdout is defined
+    - _samba_domain_computers_sid.stdout | length > 0
+  no_log: '{{ samba_domain_group_policies_no_log | default(false) | bool }}'
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Increment GPO version after policy changes
+  become: true
+  ansible.builtin.shell:
+    cmd: |
+      GPT_INI="/var/lib/samba/sysvol/{{ samba_ad_info.ad_dns_domain_name }}/Policies/{{ item.stdout }}/GPT.INI"
+      if [ -f "$GPT_INI" ]; then
+        CURRENT_VERSION=$(grep -i "^Version=" "$GPT_INI" | cut -d= -f2)
+        NEW_VERSION=$((CURRENT_VERSION + 1))
+        sed -i "s/^Version=.*/Version=$NEW_VERSION/" "$GPT_INI"
+        echo "changed"
+      fi
+  register: _samba_domain_gpo_version
+  changed_when: '"changed" in _samba_domain_gpo_version.stdout'
+  loop: "{{ _samba_domain_gpo_guids.results | default([]) }}"
+  when:
+    - item.stdout is defined
+    - item.stdout | length > 0
+    - item.item.policy_files is defined
+    - item.item.policy_files | length > 0
+  no_log: '{{ samba_domain_group_policies_no_log | default(false) | bool }}'
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Sync GPO version and extension names from GPT.INI to Active Directory
+  # This task syncs the GPO version number and Client-Side Extension (CSE) GUIDs from the
+  # GPT.INI file in SYSVOL to the corresponding attributes in Active Directory.
+  # Without gPCMachineExtensionNames/gPCUserExtensionNames in AD, Windows clients consider
+  # the GPO "empty" and do not apply it, even if policy files exist in SYSVOL.
+  become: true
+  ansible.builtin.shell:
+    cmd: |
+      GPT_INI="/var/lib/samba/sysvol/{{ samba_ad_info.ad_dns_domain_name }}/Policies/{{ item.stdout }}/GPT.INI"
+      if [ ! -f "$GPT_INI" ]; then
+        echo "GPT.INI not found"
+        exit 0
+      fi
+
+      FILE_VERSION=$(grep -i "^Version=" "$GPT_INI" | cut -d= -f2)
+      MACHINE_EXT=$(grep -i "^gPCMachineExtensionNames=" "$GPT_INI" | cut -d= -f2-)
+      USER_EXT=$(grep -i "^gPCUserExtensionNames=" "$GPT_INI" | cut -d= -f2-)
+      DN="CN={{ item.stdout }},CN=Policies,CN=System,DC={{ samba_ad_info.ad_dns_domain_name.split('.') | join(',DC=') }}"
+
+      # Build LDIF with proper separators
+      cat > /tmp/gpo_sync_$$.ldif <<EOF
+      dn: $DN
+      changetype: modify
+      replace: versionNumber
+      versionNumber: $FILE_VERSION
+      EOF
+
+      if [ -n "$MACHINE_EXT" ]; then
+        cat >> /tmp/gpo_sync_$$.ldif <<EOF
+      -
+      replace: gPCMachineExtensionNames
+      gPCMachineExtensionNames: $MACHINE_EXT
+      EOF
+      fi
+
+      if [ -n "$USER_EXT" ]; then
+        cat >> /tmp/gpo_sync_$$.ldif <<EOF
+      -
+      replace: gPCUserExtensionNames
+      gPCUserExtensionNames: $USER_EXT
+      EOF
+      fi
+
+      ldbmodify -H /var/lib/samba/private/sam.ldb /tmp/gpo_sync_$$.ldif 2>&1
+      RC=$?
+      rm -f /tmp/gpo_sync_$$.ldif
+
+      if [ $RC -eq 0 ]; then
+        echo "synced {{ item.stdout }}"
+      fi
+      exit $RC
+  register: _samba_domain_gpo_version_sync
+  changed_when: '"synced" in _samba_domain_gpo_version_sync.stdout'
+  failed_when:
+    - _samba_domain_gpo_version_sync.rc != 0
+    - '"No such attribute" not in _samba_domain_gpo_version_sync.stderr'
+  loop: "{{ _samba_domain_gpo_guids.results | default([]) }}"
+  when:
+    - item.stdout is defined
+    - item.stdout | length > 0
+    - item.item.policy_files is defined
+    - item.item.policy_files | length > 0
+  no_log: '{{ samba_domain_group_policies_no_log | default(false) | bool }}'
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management
+
+- name: Domain GPOs | Link GPOs to organizational units
+  become: true
+  ansible.builtin.command:
+    cmd: samba-tool gpo setlink "{{ item.1 }}" "{{ item.0.stdout }}" {% if item.0.item.link_option is defined and item.0.item.link_option == 'enforced' %}--enforce{% endif %} -U Administrator --password="{{ samba_ad_info.adminpass }}"
+  register: domain_gpos_link
+  changed_when: '"Added/Updated" in domain_gpos_link.stdout'
+  failed_when:
+    - domain_gpos_link.rc != 0
+    - '"already linked" not in domain_gpos_link.stderr'
+  loop: "{{ _samba_domain_gpo_guids.results | default([]) | subelements('item.link_to', skip_missing=True) }}"
+  when:
+    - item.0.stdout is defined
+    - item.0.stdout | length > 0
+    - item.0.item.link_to is defined
+    - item.0.item.link_to | length > 0
+  no_log: '{{ samba_domain_group_policies_no_log | default(true) | bool }}'
+  tags:
+    - samba_domain_group_policies
+    - samba_domain_account_management

@@ -1,0 +1,252 @@
+# RFC2307 Schema Extensions for Samba AD DC
+# {{ ansible_managed }}
+#
+# IMPORTANT: This LDIF applies Unix/Linux attributes to AD groups and users
+# - Administrator account: No uidNumber (preserves root mapping on DCs)
+# - Domain Admins group: No gidNumber (preserves ID_TYPE_BOTH mapping)
+# See: https://wiki.samba.org/index.php/Setting_up_Samba_as_a_Domain_Member
+
+# Create ypServ30 domain configuration for NIS compatibility
+dn: CN={{ samba_ad_info.netbios_domain_name | upper }},CN=ypservers,CN=ypServ30,CN=RpcServices,CN=System{{ _samba_ldap_suffix }}
+changetype: add
+objectClass: msSFU30DomainInfo
+cn: {{ samba_ad_info.netbios_domain_name | upper }}
+msSFU30MasterServerName: CN={{ ansible_hostname }}{{ _samba_ldap_suffix }}
+msSFU30OrderNumber: 10000
+msSFU30Domains: {{ samba_ad_info.netbios_domain_name | lower }}
+msSFU30MaxUidNumber: {{ _samba_uid_next_counter }}
+msSFU30MaxGidNumber: {{ _samba_gid_next_counter }}
+
+# ============================================================================
+# GROUP CONFIGURATIONS - Apply RFC2307 attributes to default AD groups
+# ============================================================================
+
+# Domain Users - Primary group for domain users
+dn: CN=Domain Users,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Domain Users
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.domain_users }}
+
+# Domain Admins - NOT assigned gidNumber to preserve ID_TYPE_BOTH mapping
+# Create separate Unix Admins group for Unix administration if needed
+dn: CN=Domain Admins,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Domain Admins
+
+# Domain Computers - Machine accounts
+dn: CN=Domain Computers,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Domain Computers
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.domain_computers }}
+
+# Domain Controllers - DC machine accounts
+dn: CN=Domain Controllers,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Domain Controllers
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.domain_controllers }}
+
+# Domain Guests - Guest access group
+dn: CN=Domain Guests,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Domain Guests
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.domain_guests }}
+
+# Schema Admins - Can modify AD schema
+dn: CN=Schema Admins,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Schema Admins
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.schema_admins }}
+
+# Enterprise Admins - Forest-wide administrators
+dn: CN=Enterprise Admins,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Enterprise Admins
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.enterprise_admins }}
+
+# Group Policy Creator Owners
+dn: CN=Group Policy Creator Owners,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Group Policy Creator Owners
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.group_policy_creator_owners }}
+
+# Read-only Domain Controllers
+dn: CN=Read-only Domain Controllers,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Read-only Domain Controllers
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.readonly_domain_controllers }}
+
+# DnsUpdateProxy - DNS dynamic update proxy
+dn: CN=DnsUpdateProxy,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: DnsUpdateProxy
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.dnsupdateproxy }}
+
+# Enterprise Read-only Domain Controllers
+dn: CN=Enterprise Read-only Domain Controllers,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Enterprise Read-only Domain Controllers
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.enterprise_readonly_domain_controllers }}
+
+# DnsAdmins - DNS administrators
+dn: CN=DnsAdmins,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: DnsAdmins
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.dnsadmins }}
+
+# Allowed RODC Password Replication Group
+dn: CN=Allowed RODC Password Replication Group,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Allowed RODC Password Replication Group
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.allowed_rodc_password_replication }}
+
+# Denied RODC Password Replication Group
+dn: CN=Denied RODC Password Replication Group,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Denied RODC Password Replication Group
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.denied_rodc_password_replication }}
+
+# RAS and IAS Servers - Remote access servers
+dn: CN=RAS and IAS Servers,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: RAS and IAS Servers
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.ras_and_ias_servers }}
+
+# Cert Publishers - Certificate publishers
+dn: CN=Cert Publishers,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Cert Publishers
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.cert_publishers }}
+
+# ============================================================================
+# USER ACCOUNTS - Apply RFC2307 attributes to system accounts
+# ============================================================================
+
+# krbtgt - Kerberos ticket-granting ticket account
+dn: CN=krbtgt,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: krbtgt
+-
+add: uidNumber
+uidNumber: {{ _samba_uid_assignments.krbtgt }}
+
+# Guest - Guest account
+dn: CN=Guest,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Guest
+-
+add: uidNumber
+uidNumber: {{ _samba_uid_assignments.guest }}
+-
+add: gidNumber
+gidNumber: {{ _samba_gid_assignments.domain_guests }}
+
+# Administrator - NOT assigned uidNumber to preserve root mapping on DCs
+dn: CN=Administrator,CN=Users{{ _samba_ldap_suffix }}
+changetype: modify
+add: msSFU30NisDomain
+msSFU30NisDomain: {{ samba_ad_info.netbios_domain_name | lower }}
+-
+add: msSFU30Name
+msSFU30Name: Administrator

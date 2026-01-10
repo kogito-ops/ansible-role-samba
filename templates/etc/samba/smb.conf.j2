@@ -310,6 +310,22 @@
         read only = No
         case sensitive = no
         smb encrypt = desired
+
+{% if samba_enable_admin_shares | bool %}
+# Administrative shares for Windows remote management tools (RSAT, etc.)
+# These are Windows-style hidden shares (ending with $) for admin access
+# WARNING: C$ provides root filesystem access - restrict to trusted admins only
+[C$]
+        comment = Administrative share (root filesystem)
+        path = {{ samba_admin_share_c_path }}
+        administrative share = yes
+        browseable = no
+        read only = no
+        valid users = {{ samba_admin_share_valid_users }}
+        admin users = {{ samba_admin_share_admin_users }}
+        vfs objects = acl_xattr
+        smb encrypt = required
+{% endif %}
 {% endif %}
 
 # Un-comment the following and create the profiles directory to store

@@ -83,6 +83,7 @@ ansible-galaxy collection install -r requirements.yml
 | Group Policy Objects        | ✅        | GPO creation, file deployment, OU linking        |
 | Domain user RFC2307         | ✅        | Auto-assign Unix attributes to domain users      |
 | Domain group RFC2307        | ✅        | Auto-assign Unix attributes to domain groups     |
+| Administrative shares (C$)  | ✅        | Windows-style admin shares for RSAT tools        |
 
 ## Configuration
 
@@ -371,6 +372,19 @@ Enable deleted object recovery:
 ```yaml
 samba_enable_recycle_bin: true
 ```
+
+#### Administrative shares (C$)
+
+Enable Windows-style administrative shares for RSAT tools, remote backup, and Windows admin utilities:
+
+```yaml
+samba_enable_admin_shares: true  # Default: false (disabled for security)
+samba_admin_share_c_path: /  # Root filesystem path
+samba_admin_share_valid_users: '@"Domain Admins", @"Enterprise Admins"'
+samba_admin_share_admin_users: '@"Domain Admins"'
+```
+
+**Security note:** Administrative shares provide root filesystem access. Only enable when needed for Windows management tools. SMB encryption is required for connections to administrative shares.
 
 ### Share configuration
 

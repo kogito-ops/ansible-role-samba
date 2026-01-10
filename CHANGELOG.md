@@ -78,6 +78,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Supports multiple forwarders separated by spaces
   - Falls back to `samba_ad_info.dns_forwarder` if not set per-host
   - Can be set in inventory or host_vars for individual DCs
+- **Administrative Shares (C$) for AD DC**
+  - Optional Windows-style administrative share for remote management
+  - Enables RSAT tools, remote backup, and Windows admin utilities
+  - Disabled by default for security (`samba_enable_admin_shares: false`)
+  - Configurable path, valid users, and admin users
+  - SMB encryption required for administrative share access
 - **Ansible Collection Dependencies**
   - Added `requirements.yml` with ansible.posix and community.general collections
 - **Python Project Configuration**

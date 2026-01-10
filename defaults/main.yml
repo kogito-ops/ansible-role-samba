@@ -438,6 +438,20 @@ samba_sudo_create_default_container: true
 # Default sudo container OU name
 samba_sudo_container_name: 'sudoers'
 
+# Administrative Shares Configuration (C$, ADMIN$)
+# Enable Windows-style administrative shares for remote management
+# These shares allow RSAT tools, remote backup, and Windows admin utilities to work
+# WARNING: Sharing root filesystem is a security risk - only enable when needed
+# Only applies to AD DC role; disabled by default for security
+samba_enable_admin_shares: false
+# Path for C$ share (root filesystem access)
+samba_admin_share_c_path: /
+# Users/groups allowed to access administrative shares
+# Default: Domain Admins and Enterprise Admins only
+samba_admin_share_valid_users: '@"Domain Admins", @"Enterprise Admins"'
+# Users/groups with admin privileges on administrative shares
+samba_admin_share_admin_users: '@"Domain Admins"'
+
 # Supported encryption types
 samba_krb5_enctypes:
   - aes256-cts-hmac-sha1-96

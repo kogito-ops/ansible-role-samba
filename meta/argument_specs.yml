@@ -1,0 +1,1255 @@
+---
+argument_specs:
+  main:
+    short_description: Manage Samba servers in standalone, AD DC, or member server modes
+    description:
+      - This role manages Samba servers in three operating modes.
+      - Standalone file servers with local users and shares.
+      - Active Directory domain controllers (primary or secondary).
+      - Domain member servers joined to existing AD domains.
+      - Supports Debian 12 and Ubuntu 22.04/24.04 LTS on amd64/arm64.
+    author:
+      - Daniel S. Reichenbach <daniel@kogito.network>
+    version_added: "1.0.0"
+
+    options:
+      # =======================================================================
+      # Core Role Configuration
+      # =======================================================================
+      samba_server_role:
+        type: str
+        required: false
+        default: standalone server
+        choices:
+          - standalone server
+          - active directory domain controller
+          - member server
+        description:
+          - Defines the Samba server operating mode.
+          - Use 'standalone server' for traditional file sharing with local users.
+          - Use 'active directory domain controller' for AD DC deployment.
+          - Use 'member server' for servers joining an existing AD domain.
+
+      samba_create_domain_controller:
+        type: bool
+        required: false
+        default: false
+        description:
+          - Enable to provision an Active Directory domain controller.
+          - When true, samba_server_role must be 'active directory domain controller'.
+
+      samba_join_domain:
+        type: bool
+        required: false
+        default: false
+        description:
+          - Enable for the server to join an existing AD domain as a member.
+          - Requires samba_domain_member configuration.
+
+      samba_cleanup_runtime_files:
+        type: bool
+        required: false
+        default: true
+        description:
+          - Clean up stale runtime files before starting Samba AD DC service.
+          - Helps prevent 'Failed to cleanup temporary files' errors on restarts.
+
+      samba_allow_unencrypted_ldap:
+        type: bool
+        required: false
+        default: false
+        description:
+          - Enable for joining legacy domain controllers without encrypted LDAP.
+          - Reduces security by disabling LDAP encryption.
+          - Only enable when required for compatibility with legacy systems.
+
+      # =======================================================================
+      # Domain Configuration
+      # =======================================================================
+      samba_primary_domain:
+        type: str
+        required: false
+        default: samba.internal
+        description:
+          - The primary AD domain name (DNS format).
+          - Used for both domain controllers and member servers.
+
+      samba_workgroup:
+        type: str
+        required: false
+        description:
+          - NetBIOS workgroup name.
+          - Defaults to the first component of samba_primary_domain in uppercase.
+
+      samba_domain_controllers_group:
+        type: str
+        required: false
+        default: samba_domain_controllers
+        description:
+          - Ansible inventory group containing domain controllers.
+          - Used to identify primary DC and coordinate replication.
+
+      samba_primary_domain_controller:
+        type: str
+        required: false
+        description:
+          - Hostname of the primary domain controller.
+          - Defaults to the first host in samba_domain_controllers_group.
+
+      samba_domain_controller_ip:
+        type: str
+        required: false
+        description:
+          - IP address for the domain controller.
+          - Defaults to ansible_default_ipv4.address.
+
+      # =======================================================================
+      # AD Domain Controller Configuration
+      # =======================================================================
+      samba_ad_info:
+        type: dict
+        required: false
+        description:
+          - Active Directory domain controller configuration.
+          - Required when samba_create_domain_controller is true.
+        options:
+          ad_dc_hostname:
+            type: str
+            required: false
+            description: Domain controller hostname. Defaults to ansible_hostname.
+
+          ad_dc_fqdn:
+            type: str
+            required: false
+            description: Domain controller FQDN. Defaults to ansible_fqdn.
+
+          ad_dns_domain_name:
+            type: str
+            required: false
+            description: DNS domain name for AD. Defaults to samba_primary_domain.
+
+          adminpass:
+            type: str
+            required: true
+            no_log: true
+            description:
+              - Administrator account password.
+              - Use Ansible Vault for production deployments.
+
+          machinepass:
+            type: str
+            required: false
+            no_log: true
+            description:
+              - Machine account password.
+              - Use Ansible Vault for production deployments.
+
+          allow_dns_updates:
+            type: str
+            required: false
+            default: disabled
+            choices:
+              - disabled
+              - nonsecure
+              - secure
+            description: DNS update policy for the domain.
+
+          backend_dns:
+            type: str
+            required: false
+            default: SAMBA_INTERNAL
+            choices:
+              - SAMBA_INTERNAL
+              - BIND9_DLZ
+            description: DNS backend for the domain controller.
+
+          dns_forwarder:
+            type: str
+            required: false
+            default: "8.8.8.8"
+            description:
+              - DNS forwarder IP address.
+              - Multiple forwarders can be space-separated.
+
+          kerberos_realm:
+            type: str
+            required: false
+            description: Kerberos realm name. Defaults to samba_primary_domain.
+
+          netbios_domain_name:
+            type: str
+            required: false
+            description: NetBIOS domain name. Derived from samba_primary_domain.
+
+      samba_dns_forwarder:
+        type: str
+        required: false
+        description:
+          - Per-DC DNS forwarder override.
+          - Set in host_vars for different forwarders per domain controller.
+          - Supports multiple forwarders separated by spaces.
+
+      # =======================================================================
+      # Domain Member Server Configuration
+      # =======================================================================
+      samba_domain_member:
+        type: dict
+        required: false
+        description:
+          - Configuration for joining a domain as a member server.
+          - Required when samba_server_role is 'member server'.
+        options:
+          domain:
+            type: str
+            required: true
+            description: AD domain name to join.
+
+          workgroup:
+            type: str
+            required: false
+            description: NetBIOS workgroup name.
+
+          realm:
+            type: str
+            required: false
+            description: Kerberos realm (typically domain name in uppercase).
+
+          domain_admin_user:
+            type: str
+            required: false
+            default: Administrator
+            description: Domain admin username for joining the domain.
+
+          domain_admin_password:
+            type: str
+            required: true
+            no_log: true
+            description:
+              - Domain admin password for joining.
+              - Use Ansible Vault for production deployments.
+
+          domain_controller:
+            type: str
+            required: false
+            description: Domain controller hostname or IP for joining.
+
+          id_mapping:
+            type: dict
+            required: false
+            description: ID mapping configuration for Unix/Windows ID translation.
+            options:
+              backend:
+                type: str
+                required: false
+                default: rid
+                choices:
+                  - rid
+                  - autorid
+                  - ad
+                  - tdb
+                description: ID mapping backend type.
+
+              range_min:
+                type: int
+                required: false
+                default: 10000
+                description: Minimum UID/GID for mapped IDs.
+
+              range_max:
+                type: int
+                required: false
+                default: 999999
+                description: Maximum UID/GID for mapped IDs.
+
+      # =======================================================================
+      # Local Users and Groups (Standalone Mode)
+      # =======================================================================
+      samba_local_groups:
+        type: list
+        elements: str
+        required: false
+        default: []
+        description:
+          - List of local groups to create for standalone servers.
+          - Each item is a group name string.
+
+      samba_local_groups_no_log:
+        type: bool
+        required: false
+        default: true
+        description: Suppress output of local group operations.
+
+      samba_local_users:
+        type: list
+        elements: dict
+        required: false
+        default: []
+        description:
+          - List of local users to create for standalone servers.
+          - Each user is a dictionary with name, smbpasswd, and groups.
+        options:
+          name:
+            type: str
+            required: true
+            description: Username to create.
+
+          smbpasswd:
+            type: str
+            required: true
+            no_log: true
+            description: Samba password for the user.
+
+          groups:
+            type: list
+            elements: str
+            required: false
+            default: []
+            description: List of groups to add the user to.
+
+      samba_local_users_no_log:
+        type: bool
+        required: false
+        default: true
+        description: Suppress output of local user operations.
+
+      # =======================================================================
+      # Domain Users and Groups
+      # =======================================================================
+      samba_create_domain_users:
+        type: bool
+        required: false
+        default: false
+        description: Enable creation of domain users defined in samba_domain_users.
+
+      samba_domain_users:
+        type: list
+        elements: dict
+        required: false
+        default: []
+        description:
+          - List of domain users to create.
+          - RFC2307 Unix attributes are auto-assigned when samba_enable_rfc2307 is true.
+        options:
+          name:
+            type: str
+            required: true
+            description: Username to create.
+
+          password:
+            type: str
+            required: true
+            no_log: true
+            description: User password. Use Ansible Vault for production.
+
+          given_name:
+            type: str
+            required: false
+            description: User's first name.
+
+          surname:
+            type: str
+            required: false
+            description: User's last name.
+
+          mail_address:
+            type: str
+            required: false
+            description: User's email address.
+
+          description:
+            type: str
+            required: false
+            description: User description.
+
+          use_username_as_cn:
+            type: bool
+            required: false
+            default: true
+            description: Use username as CN instead of full name.
+
+          account_disabled:
+            type: bool
+            required: false
+            default: false
+            description: Whether the account is disabled.
+
+          groups:
+            type: list
+            elements: str
+            required: false
+            default: []
+            description: List of groups to add the user to.
+
+          uid:
+            type: int
+            required: false
+            description: Specific UID for RFC2307. Auto-assigned if omitted.
+
+          gid:
+            type: int
+            required: false
+            description: Primary GID for RFC2307. Defaults to Domain Users GID.
+
+          unix_home:
+            type: str
+            required: false
+            description: Home directory path. Defaults to /home/<username>.
+
+          login_shell:
+            type: str
+            required: false
+            default: /bin/bash
+            description: User's login shell.
+
+      samba_domain_users_no_log:
+        type: bool
+        required: false
+        default: true
+        description: Suppress output of domain user operations.
+
+      samba_create_domain_groups:
+        type: bool
+        required: false
+        default: false
+        description: Enable creation of domain groups defined in samba_domain_groups.
+
+      samba_domain_groups:
+        type: list
+        elements: dict
+        required: false
+        default: []
+        description:
+          - List of domain groups to create.
+          - RFC2307 Unix attributes are auto-assigned when samba_enable_rfc2307 is true.
+        options:
+          name:
+            type: str
+            required: true
+            description: Group name to create.
+
+          description:
+            type: str
+            required: false
+            description: Group description.
+
+          members:
+            type: list
+            elements: str
+            required: false
+            default: []
+            description: List of usernames to add as members.
+
+          gid:
+            type: int
+            required: false
+            description: Specific GID for RFC2307. Auto-assigned if omitted.
+
+      samba_domain_groups_no_log:
+        type: bool
+        required: false
+        default: true
+        description: Suppress output of domain group operations.
+
+      # =======================================================================
+      # Organizational Units
+      # =======================================================================
+      samba_create_domain_organizational_units:
+        type: bool
+        required: false
+        default: false
+        description: Enable creation of OUs defined in samba_domain_organizational_units.
+
+      samba_domain_organizational_units:
+        type: list
+        elements: str
+        required: false
+        default: []
+        description:
+          - List of organizational units to create.
+          - Each item is an OU distinguished name.
+          - "Example: 'OU=Computers,DC=ad,DC=example,DC=com'."
+
+      samba_domain_organizational_units_no_log:
+        type: bool
+        required: false
+        default: true
+        description: Suppress output of OU operations.
+
+      # =======================================================================
+      # Group Policy Objects
+      # =======================================================================
+      samba_create_domain_group_policies:
+        type: bool
+        required: false
+        default: false
+        description: Enable creation of GPOs defined in samba_domain_group_policies.
+
+      samba_domain_group_policies:
+        type: list
+        elements: dict
+        required: false
+        default: []
+        description:
+          - List of Group Policy Objects to create.
+          - Each GPO can be linked to domain or OUs.
+        options:
+          name:
+            type: str
+            required: true
+            description: GPO name.
+
+          link_to:
+            type: list
+            elements: str
+            required: false
+            description: List of DNs to link the GPO to.
+
+          link_option:
+            type: str
+            required: false
+            default: enabled
+            choices:
+              - enforced
+              - enabled
+              - disabled
+            description: GPO link enforcement option.
+
+          policy_files:
+            type: list
+            elements: dict
+            required: false
+            description: List of policy files to deploy within the GPO.
+
+      samba_domain_group_policies_no_log:
+        type: bool
+        required: false
+        default: true
+        description: Suppress output of GPO operations.
+
+      # =======================================================================
+      # Service Accounts
+      # =======================================================================
+      samba_create_domain_service_accounts:
+        type: bool
+        required: false
+        default: false
+        description: Enable creation of service accounts in samba_domain_service_accounts.
+
+      samba_domain_service_accounts:
+        type: list
+        elements: dict
+        required: false
+        default: []
+        description:
+          - List of service accounts to create.
+          - Service accounts support Kerberos keytab export.
+        options:
+          name:
+            type: str
+            required: true
+            description: Service account username.
+
+          password:
+            type: str
+            required: true
+            no_log: true
+            description: Account password. Use Ansible Vault.
+
+          description:
+            type: str
+            required: false
+            description: Account description.
+
+          password_never_expires:
+            type: bool
+            required: false
+            default: true
+            description: Set password to never expire.
+
+          account_disabled:
+            type: bool
+            required: false
+            default: false
+            description: Whether the account is disabled.
+
+          add_to_group:
+            type: bool
+            required: false
+            default: true
+            description: Add to service accounts group.
+
+          group:
+            type: str
+            required: false
+            default: Service Accounts
+            description: Group name for service accounts.
+
+          spn:
+            type: str
+            required: false
+            description: Service Principal Name for Kerberos.
+
+          export_keytab:
+            type: bool
+            required: false
+            default: false
+            description: Export Kerberos keytab file.
+
+          keytab_path:
+            type: path
+            required: false
+            description: Path for keytab file export.
+
+          keytab_owner:
+            type: str
+            required: false
+            description: Keytab file owner.
+
+          keytab_group:
+            type: str
+            required: false
+            description: Keytab file group.
+
+          keytab_mode:
+            type: str
+            required: false
+            default: "0600"
+            description: Keytab file permissions.
+
+          update_password:
+            type: bool
+            required: false
+            default: false
+            description: Update password if account exists.
+
+      samba_domain_service_accounts_no_log:
+        type: bool
+        required: false
+        default: true
+        description: Suppress output of service account operations.
+
+      # =======================================================================
+      # File Shares
+      # =======================================================================
+      samba_shares_path:
+        type: path
+        required: false
+        default: /mnt/samba/shares
+        description: Base directory for Samba file shares.
+
+      samba_profiles_path:
+        type: path
+        required: false
+        default: /mnt/samba/profiles
+        description: Directory for roaming user profiles.
+
+      samba_shares:
+        type: list
+        elements: dict
+        required: false
+        default: []
+        description:
+          - List of file shares to create and configure.
+          - Each share specifies permissions and access controls.
+        options:
+          name:
+            type: str
+            required: true
+            description: Share name.
+
+          comment:
+            type: str
+            required: false
+            description: Share description/comment shown to clients.
+
+          owner:
+            type: str
+            required: false
+            default: nobody
+            description: Directory owner.
+
+          group:
+            type: str
+            required: false
+            default: nogroup
+            description: Directory group.
+
+          mode:
+            type: str
+            required: false
+            default: "0755"
+            description: Directory permissions.
+
+          browsable:
+            type: bool
+            required: false
+            default: true
+            description: Whether the share is visible in browse lists.
+
+          guest_ok:
+            type: bool
+            required: false
+            default: false
+            description: Allow guest access without authentication.
+
+          read_only:
+            type: bool
+            required: false
+            default: true
+            description: Mount share as read-only.
+
+          writable:
+            type: bool
+            required: false
+            default: false
+            description: Allow write access to the share.
+
+          valid_users:
+            type: str
+            required: false
+            description: Users/groups allowed to access the share.
+
+      # =======================================================================
+      # Home Directory and PAM Configuration
+      # =======================================================================
+      samba_home_path:
+        type: path
+        required: false
+        default: /home
+        description: Base path for user home directories.
+
+      samba_home_umask:
+        type: str
+        required: false
+        default: "0022"
+        description: Umask for home directory creation.
+
+      samba_home_share_enabled:
+        type: bool
+        required: false
+        default: true
+        description: Enable automatic homes share for user directories.
+
+      samba_pam_mkhomedir_enabled:
+        type: bool
+        required: false
+        default: true
+        description: Enable PAM mkhomedir for automatic home directory creation.
+
+      samba_ssh_allow_users:
+        type: list
+        elements: str
+        required: false
+        default: []
+        description: List of users allowed SSH access.
+
+      # =======================================================================
+      # TLS/SSL Configuration
+      # =======================================================================
+      samba_tls_enable:
+        type: bool
+        required: false
+        default: false
+        description:
+          - Enable transport encryption for Samba.
+          - Requires TLS certificate paths to be configured.
+
+      samba_tls_key:
+        type: path
+        required: false
+        default: /etc/ssl/private/samba.key
+        description: Path to TLS private key file.
+
+      samba_tls_certificate:
+        type: path
+        required: false
+        default: /etc/ssl/certs/samba.crt
+        description: Path to TLS certificate file.
+
+      samba_tls_ca_certificate:
+        type: path
+        required: false
+        default: /etc/ssl/certs/ca-certificates.crt
+        description: Path to CA certificates file.
+
+      # =======================================================================
+      # Security and Policies
+      # =======================================================================
+      samba_security:
+        type: str
+        required: false
+        default: user
+        choices:
+          - share
+          - user
+          - domain
+          - server
+          - ads
+        description: Samba security mode.
+
+      samba_password_policy:
+        type: dict
+        required: false
+        description: Password policy settings for the domain.
+        options:
+          complexity_enabled:
+            type: bool
+            required: false
+            default: true
+            description: Require password complexity.
+
+          history_length:
+            type: int
+            required: false
+            default: 24
+            description: Number of previous passwords to remember.
+
+          max_age:
+            type: int
+            required: false
+            default: 43
+            description: Maximum password age in days.
+
+          min_age:
+            type: int
+            required: false
+            default: 1
+            description: Minimum password age in days.
+
+          min_length:
+            type: int
+            required: false
+            default: 7
+            description: Minimum password length.
+
+      samba_account_policy:
+        type: dict
+        required: false
+        description: Account lockout policy settings.
+        options:
+          lockout_duration:
+            type: int
+            required: false
+            default: 30
+            description: Account lockout duration in minutes.
+
+          lockout_threshold:
+            type: int
+            required: false
+            default: 0
+            description: Failed login attempts before lockout. 0 disables.
+
+          reset_lockout_after:
+            type: int
+            required: false
+            default: 30
+            description: Time to reset failed login counter in minutes.
+
+      # =======================================================================
+      # RFC2307 Schema Configuration
+      # =======================================================================
+      samba_enable_rfc2307:
+        type: bool
+        required: false
+        default: true
+        description:
+          - Enable RFC2307 schema extensions for Unix attribute support.
+          - Required for Linux clients to get UID, GID, shell, and home attributes.
+
+      samba_rfc2307_id_start:
+        type: int
+        required: false
+        default: 10000
+        description: Starting UID/GID for RFC2307 ID mapping.
+
+      samba_rfc2307_domain_user_uid_start:
+        type: int
+        required: false
+        default: 10100
+        description: Starting UID for domain users.
+
+      samba_rfc2307_domain_group_gid_start:
+        type: int
+        required: false
+        default: 10500
+        description: Starting GID for domain groups.
+
+      samba_rfc2307_service_account_uid_start:
+        type: int
+        required: false
+        default: 11000
+        description: Starting UID for service accounts.
+
+      samba_rfc2307_create_unix_admins:
+        type: bool
+        required: false
+        default: true
+        description: Create Unix Admins group to avoid Domain Admins GID issues.
+
+      samba_rfc2307_unix_admins_group:
+        type: str
+        required: false
+        default: Unix Admins
+        description: Name of the Unix Admins group.
+
+      # =======================================================================
+      # SSH Key Schema
+      # =======================================================================
+      samba_enable_ssh_schema:
+        type: bool
+        required: false
+        default: true
+        description:
+          - Enable SSH public key schema extensions.
+          - Allows storing SSH keys in AD user objects.
+
+      samba_ssh_schema_allow_public_keys:
+        type: bool
+        required: false
+        default: true
+        description: Allow SSH key storage in AD user objects.
+
+      # =======================================================================
+      # Sudo Schema
+      # =======================================================================
+      samba_enable_sudo_schema:
+        type: bool
+        required: false
+        default: true
+        description:
+          - Enable Sudo schema extensions.
+          - Allows storing sudo rules in AD.
+
+      samba_sudo_create_default_container:
+        type: bool
+        required: false
+        default: true
+        description: Create default sudo rules container.
+
+      samba_sudo_container_name:
+        type: str
+        required: false
+        default: sudoers
+        description: Name of the sudo container OU.
+
+      # =======================================================================
+      # Administrative Shares
+      # =======================================================================
+      samba_enable_admin_shares:
+        type: bool
+        required: false
+        default: false
+        description:
+          - Enable Windows-style administrative shares (C$).
+          - Required for RSAT tools and remote management.
+          - Security risk as it shares the root filesystem.
+
+      samba_admin_share_c_path:
+        type: path
+        required: false
+        default: /
+        description: Path for C$ administrative share.
+
+      samba_admin_share_valid_users:
+        type: str
+        required: false
+        default: '@"Domain Admins", @"Enterprise Admins"'
+        description: Users/groups allowed to access administrative shares.
+
+      samba_admin_share_admin_users:
+        type: str
+        required: false
+        default: '@"Domain Admins"'
+        description: Users/groups with admin privileges on administrative shares.
+
+      # =======================================================================
+      # Enhanced Provisioning
+      # =======================================================================
+      samba_enhanced_provisioning_enabled:
+        type: bool
+        required: false
+        default: true
+        description: Enable enhanced security settings during domain provisioning.
+
+      samba_rpc_port_range:
+        type: str
+        required: false
+        default: 49152-65535
+        description: Dynamic RPC port range.
+
+      samba_security_options:
+        type: dict
+        required: false
+        description: Advanced security options.
+        options:
+          require_strong_auth:
+            type: bool
+            required: false
+            default: true
+            description: Require strong authentication.
+
+          password_hash_schemes:
+            type: list
+            elements: str
+            required: false
+            description: Password hash schemes to use.
+
+      samba_enable_recycle_bin:
+        type: bool
+        required: false
+        default: true
+        description: Enable AD Recycle Bin for object recovery.
+
+      # =======================================================================
+      # Kerberos Configuration
+      # =======================================================================
+      samba_krb5_ticket_lifetime:
+        type: str
+        required: false
+        default: 24h
+        description: Kerberos ticket lifetime.
+
+      samba_krb5_renew_lifetime:
+        type: str
+        required: false
+        default: 7d
+        description: Kerberos renewable ticket lifetime.
+
+      samba_krb5_enctypes:
+        type: list
+        elements: str
+        required: false
+        default:
+          - aes256-cts-hmac-sha1-96
+          - aes128-cts-hmac-sha1-96
+        description: Supported Kerberos encryption types.
+
+      # =======================================================================
+      # CTDB Clustering
+      # =======================================================================
+      samba_create_cluster:
+        type: bool
+        required: false
+        default: false
+        description: Replace Samba TDB with clustered TDB.
+
+      samba_ctdb_log_destination:
+        type: str
+        required: false
+        default: syslog
+        description: CTDB log destination.
+
+      samba_ctdb_log_level:
+        type: str
+        required: false
+        default: NOTICE
+        choices:
+          - EMERG
+          - ALERT
+          - CRIT
+          - ERR
+          - WARNING
+          - NOTICE
+          - INFO
+          - DEBUG
+        description: CTDB log level.
+
+      # =======================================================================
+      # Samba Configuration Options
+      # =======================================================================
+      samba_server_string:
+        type: str
+        required: false
+        default: (Samba, Ubuntu)
+        description: Server description string shown to clients.
+
+      samba_max_log_size:
+        type: int
+        required: false
+        default: 1000
+        description: Maximum log file size in KB.
+
+      samba_extra_options:
+        type: str
+        required: false
+        default: ""
+        description: Additional startup options for Samba services.
+
+      samba_passwd_chat:
+        type: str
+        required: false
+        description: Password chat string for passwd program.
+
+      samba_create_mask:
+        type: str
+        required: false
+        default: "0600"
+        description: Default file creation mask.
+
+      samba_directory_mask:
+        type: str
+        required: false
+        default: "0700"
+        description: Default directory creation mask.
+
+      samba_force_create_mode:
+        type: str
+        required: false
+        default: "0775"
+        description: Forced file creation mode bits.
+
+      samba_force_directory_mode:
+        type: str
+        required: false
+        default: "0775"
+        description: Forced directory creation mode bits.
+
+      samba_home_create_mask:
+        type: str
+        required: false
+        default: "0700"
+        description: File creation mask for home directories.
+
+      samba_home_directory_mask:
+        type: str
+        required: false
+        default: "0700"
+        description: Directory creation mask for home directories.
+
+      samba_profiles_create_mask:
+        type: str
+        required: false
+        default: "0700"
+        description: File creation mask for profile directories.
+
+      samba_profiles_directory_mask:
+        type: str
+        required: false
+        default: "0700"
+        description: Directory creation mask for profile directories.
+
+      samba_printers_create_mask:
+        type: str
+        required: false
+        default: "0700"
+        description: File creation mask for printer spool.
+
+      # =======================================================================
+      # System Directories
+      # =======================================================================
+      samba_datadir:
+        type: path
+        required: false
+        default: /var/lib/samba
+        description: Data directory for Samba databases.
+
+      samba_logdir:
+        type: path
+        required: false
+        default: /var/log/samba
+        description: Log directory for Samba logs.
+
+      samba_spooldir:
+        type: path
+        required: false
+        default: /var/spool/samba
+        description: Spool directory for print jobs.
+
+      samba_statedir:
+        type: path
+        required: false
+        default: /var/lib/samba
+        description: State directory for Samba state files.
+
+      samba_systemd_resolveddir:
+        type: path
+        required: false
+        default: /etc/systemd/resolved.conf.d
+        description: systemd-resolved configuration directory.
+
+      samba_krb5_conf:
+        type: path
+        required: false
+        default: /etc/krb5.conf
+        description: Kerberos configuration file path.
+
+      samba_system_logdir:
+        type: path
+        required: false
+        default: /var/log
+        description: System log directory.
+
+      # =======================================================================
+      # System Commands
+      # =======================================================================
+      samba_useradd_command:
+        type: path
+        required: false
+        default: /usr/sbin/useradd
+        description: Path to useradd command.
+
+      samba_groupadd_command:
+        type: path
+        required: false
+        default: /usr/sbin/groupadd
+        description: Path to groupadd command.
+
+      samba_usermod_command:
+        type: path
+        required: false
+        default: /usr/sbin/usermod
+        description: Path to usermod command.
+
+      samba_passwd_command:
+        type: path
+        required: false
+        default: /usr/bin/passwd
+        description: Path to passwd command.
+
+      samba_pdbedit_command:
+        type: path
+        required: false
+        default: /usr/bin/pdbedit
+        description: Path to pdbedit command.
+
+      samba_system_shell:
+        type: path
+        required: false
+        default: /bin/false
+        description: Shell for system accounts.
+
+      samba_system_homedir:
+        type: path
+        required: false
+        default: /dev/null
+        description: Home directory for system accounts.
+
+      # =======================================================================
+      # Network Settings
+      # =======================================================================
+      samba_ldap_port:
+        type: int
+        required: false
+        default: 389
+        description: LDAP port for domain controller connectivity.
+
+      samba_wait_timeout:
+        type: int
+        required: false
+        default: 120
+        description: Timeout in seconds for waiting for domain controller.
+
+      # =======================================================================
+      # Recycle Bin Settings
+      # =======================================================================
+      samba_dsheuristics_value:
+        type: str
+        required: false
+        default: "0000002"
+        description: dsHeuristics value for enabling recycle bin.
+
+      samba_recycle_bin_admin:
+        type: str
+        required: false
+        default: Administrator
+        description: Administrator account for recycle bin operations.

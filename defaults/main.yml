@@ -93,7 +93,8 @@ samba_create_domain_users: false
 samba_domain_controllers_group: samba_domain_controllers
 
 # Define which Ansible host should be considered the primary domain controller
-samba_primary_domain_controller: '{{ groups[samba_domain_controllers_group][0] }}'
+# Falls back to empty string if the domain controllers group doesn't exist
+samba_primary_domain_controller: "{{ groups.get(samba_domain_controllers_group, [''])[0] }}"
 
 # Defines the domain controller default IP address
 samba_domain_controller_ip: '{{ ansible_default_ipv4.address }}'

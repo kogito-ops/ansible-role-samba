@@ -1,6 +1,7 @@
 ---
 - name: Converge Standalone Server
   hosts: all
+  become: true
   tasks:
     - name: Update apt cache
       ansible.builtin.apt:

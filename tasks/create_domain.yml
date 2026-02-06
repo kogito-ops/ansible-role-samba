@@ -38,12 +38,69 @@
     - samba-ad
     - samba-domain
 
+- name: Create domain | Check if host previously joined a domain
+  ansible.builtin.stat:
+    path: '{{ samba_statedir }}/.samba_ad_joined'
+  register: samba_ad_joined_check
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
 - name: Create domain | Check if AD database exists
   ansible.builtin.stat:
     path: '{{ samba_datadir }}/private/sam.ldb'
   register: samba_ad_database_check
   tags:
-    - samba_domain
+    - samba
+    - samba-ad
+    - samba-domain
+
+# Prevent domain re-provisioning on a host that joined as secondary DC.
+# This catches the scenario where a secondary DC is reconfigured as primary
+# (e.g. by changing inventory order or samba_primary_domain_controller).
+# Running 'samba-tool domain provision' on such a host would destroy the
+# replicated AD database and all domain data.
+- name: Create domain | Fail if host has existing domain join marker
+  ansible.builtin.fail:
+    msg: >-
+      CRITICAL: This host ({{ inventory_hostname }}) has a domain join marker
+      ({{ samba_statedir }}/.samba_ad_joined) indicating it previously joined an
+      existing domain as a secondary DC. It is now configured as the primary DC
+      (samba_primary_domain_controller={{ samba_primary_domain_controller }}).
+      Running domain provision would destroy the existing AD database. If you
+      intend to promote this host, do so through Samba's own tools, not by
+      re-provisioning. Remove the join marker only if you are certain this host
+      has no AD data to preserve.
+  when:
+    - inventory_hostname == samba_primary_domain_controller
+    - samba_ad_joined_check['stat']['exists'] | bool
+    - not samba_ad_created_check['stat']['exists'] | bool
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
+
+# Prevent domain re-provisioning when an AD database already exists but was
+# not created by this role. This catches cases where sam.ldb exists from a
+# previous domain join or manual setup.
+- name: Create domain | Fail if AD database exists without creation marker
+  ansible.builtin.fail:
+    msg: >-
+      CRITICAL: An AD database exists at {{ samba_datadir }}/private/sam.ldb
+      on {{ inventory_hostname }}, but no domain creation marker was found at
+      {{ samba_statedir }}/.samba_ad_created. This indicates the database was
+      created outside of this role's provisioning flow (e.g. via domain join).
+      Running domain provision would destroy this database. Investigate the
+      state of this host before proceeding.
+  when:
+    - inventory_hostname == samba_primary_domain_controller
+    - samba_ad_database_check['stat']['exists'] | bool
+    - not samba_ad_created_check['stat']['exists'] | bool
+  tags:
+    - samba
+    - samba-ad
+    - samba-domain
 
 - name: Create domain | configuring Active Directory # yamllint disable rule:line-length
   become: true
@@ -57,9 +114,11 @@
     - samba_ad_created.rc | default(0) != 0
     - '"Domain provisioned OK" not in samba_ad_created.stdout | default("")'
   when:
-    - not samba_ad_created_check['stat']['exists']|bool
+    - not samba_ad_created_check['stat']['exists'] | bool
+    - not samba_ad_joined_check['stat']['exists'] | bool
+    - not samba_ad_database_check['stat']['exists'] | bool
     - samba_create_domain_controller is defined
-    - samba_create_domain_controller|bool
+    - samba_create_domain_controller | bool
     - samba_server_role == "active directory domain controller"
     - inventory_hostname == samba_primary_domain_controller
   changed_when: samba_ad_created.changed | default(false)
@@ -134,6 +193,8 @@
     - inventory_hostname == samba_primary_domain_controller
     - >-
       samba_ad_created_check['stat']['exists']|bool or
+      samba_ad_joined_check['stat']['exists']|bool or
+      samba_ad_database_check['stat']['exists']|bool or
       samba_ad_database_check_after['stat']['exists']|default(false)|bool or
       (_samba_domain_created is defined and _samba_domain_created['changed'])
   tags:

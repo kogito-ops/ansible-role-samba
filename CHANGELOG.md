@@ -109,6 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Detailed comments for user, group, and service account configuration
 
 ### Fixed
+- **Domain re-provisioning guard**: Prevent `samba-tool domain provision` from running on a host that previously joined a domain as secondary DC. Changing a secondary DC to primary (e.g. by reordering inventory) would previously destroy the replicated AD database. The role now checks for `.samba_ad_joined` marker and existing `sam.ldb` before provisioning and fails with a clear error message if either is found without a corresponding creation marker.
 - **Idempotence improvements** for reliable repeated execution
   - Domain marker file creation now uses `copy` with `force: false` instead of `state: touch` to prevent false positives
   - Password policy comparison logic enhanced with explicit type conversion to prevent string/integer mismatches
